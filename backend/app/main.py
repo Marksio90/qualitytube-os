@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from .modules import HookVariant, RetentionReview, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -90,6 +90,35 @@ class CompareVersionsResponse(BaseModel):
     to_revision: int
     changed_sections: list[str]
 
+
+
+class GenerateHooksResponse(BaseModel):
+    script_id: UUID
+    hooks: list[HookVariant]
+
+
+class ListHooksResponse(BaseModel):
+    script_id: UUID
+    hooks: list[HookVariant]
+
+
+class ScoreHookResponse(BaseModel):
+    hook: HookVariant
+
+
+class SelectHookResponse(BaseModel):
+    hook: HookVariant
+
+
+class AnalyzeRetentionResponse(BaseModel):
+    script_id: UUID
+    review: RetentionReview
+
+
+class LatestRetentionResponse(BaseModel):
+    script_id: UUID
+    review: RetentionReview
+
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         self.code = code
@@ -127,6 +156,14 @@ def _basic_sections() -> list[ScriptSection]:
         ScriptSection(title="cta", content="CTA: Ask viewers to test one tactic today and report outcomes in comments."),
     ]
 
+
+
+
+def _get_script_or_404(script_id: UUID) -> Script:
+    script = script_by_id.get(script_id)
+    if script is None:
+        raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    return script
 
 def _enforce_approval_gates(script: Script, gates: GateRule) -> None:
     if not script.sections:
@@ -320,3 +357,56 @@ def override_script(script_id: UUID, payload: OverrideRequest) -> ApprovalResult
     repo.revise_script(script.idea_id, approved, f"override:{payload.approver}")
     script_by_id[script_id] = approved
     return ApprovalResult(approved=True, state=approved.state)
+
+
+@app.post("/api/v1/scripts/{script_id}/hooks/generate", response_model=GenerateHooksResponse)
+def generate_hooks(script_id: UUID) -> GenerateHooksResponse:
+    script = _get_script_or_404(script_id)
+    generated = script_ai.generate_hook_variants(angle=script.angle_id, sections=script.sections)
+    hooks = list(repo.create_hook_variants(script_id, generated.variants))
+    return GenerateHooksResponse(script_id=script_id, hooks=hooks)
+
+
+@app.get("/api/v1/scripts/{script_id}/hooks", response_model=ListHooksResponse)
+def list_hooks(script_id: UUID) -> ListHooksResponse:
+    _get_script_or_404(script_id)
+    return ListHooksResponse(script_id=script_id, hooks=list(repo.list_hooks(script_id)))
+
+
+@app.post("/api/v1/hooks/{hook_id}/score", response_model=ScoreHookResponse)
+def score_hook(hook_id: UUID) -> ScoreHookResponse:
+    for script_id, script in script_by_id.items():
+        for hook in repo.list_hooks(script_id):
+            if hook.id == hook_id:
+                rescored = script_ai.score_hook_variant(angle=script.angle_id, hook_text=hook.text, script_sections=script.sections)
+                hook.score = rescored.score
+                hook.notes = rescored.notes
+                hook.risk_level = rescored.risk_level
+                return ScoreHookResponse(hook=hook)
+    raise HTTPException(status_code=404, detail=ErrorPayload(code="HOOK_NOT_FOUND", message="hook not found").model_dump())
+
+
+@app.post("/api/v1/hooks/{hook_id}/select", response_model=SelectHookResponse)
+def select_hook(hook_id: UUID) -> SelectHookResponse:
+    try:
+        hook = repo.select_hook(hook_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=ErrorPayload(code="HOOK_NOT_FOUND", message="hook not found").model_dump()) from exc
+    return SelectHookResponse(hook=hook)
+
+
+@app.post("/api/v1/scripts/{script_id}/retention/analyze", response_model=AnalyzeRetentionResponse)
+def analyze_retention(script_id: UUID) -> AnalyzeRetentionResponse:
+    script = _get_script_or_404(script_id)
+    analysis = script_ai.analyze_retention(angle=script.angle_id, sections=script.sections)
+    review = repo.save_retention_review(script_id, analysis.review)
+    return AnalyzeRetentionResponse(script_id=script_id, review=review)
+
+
+@app.get("/api/v1/scripts/{script_id}/retention/latest", response_model=LatestRetentionResponse)
+def get_latest_retention(script_id: UUID) -> LatestRetentionResponse:
+    _get_script_or_404(script_id)
+    review = repo.get_latest_retention_review(script_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail=ErrorPayload(code="RETENTION_REVIEW_NOT_FOUND", message="no retention review found for script").model_dump())
+    return LatestRetentionResponse(script_id=script_id, review=review)
