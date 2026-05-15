@@ -81,6 +81,15 @@ class ApprovalResult(BaseModel):
     state: ScriptState
 
 
+class ScriptVersionListResponse(BaseModel):
+    versions: list[Any]
+
+
+class CompareVersionsResponse(BaseModel):
+    from_revision: int
+    to_revision: int
+    changed_sections: list[str]
+
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         self.code = code
@@ -256,6 +265,35 @@ def improve_script(script_id: UUID, payload: ImproveRequest) -> Script:
     repo.revise_script(script.idea_id, updated, payload.editor_event)
     script_by_id[script_id] = updated
     return updated
+
+
+
+
+@app.get("/api/v1/scripts/{script_id}/versions")
+def list_script_versions(script_id: UUID) -> dict[str, Any]:
+    script = script_by_id.get(script_id)
+    if script is None:
+        raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    versions = repo.get_versions(script_id)
+    return {"versions": [version.model_dump(mode="json") for version in versions]}
+
+
+@app.get("/api/v1/scripts/{script_id}/compare")
+def compare_script_versions(script_id: UUID, from_revision: int, to_revision: int) -> CompareVersionsResponse:
+    script = script_by_id.get(script_id)
+    if script is None:
+        raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    versions = {item.revision: item for item in repo.get_versions(script_id)}
+    if from_revision not in versions or to_revision not in versions:
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorPayload(code="REVISION_NOT_FOUND", message="requested revision not found").model_dump(),
+        )
+    before = {section.title.lower(): section.content for section in versions[from_revision].script_snapshot.sections}
+    after = {section.title.lower(): section.content for section in versions[to_revision].script_snapshot.sections}
+    all_titles = sorted(set(before.keys()) | set(after.keys()))
+    changed_sections = [title for title in all_titles if before.get(title) != after.get(title)]
+    return CompareVersionsResponse(from_revision=from_revision, to_revision=to_revision, changed_sections=changed_sections)
 
 
 @app.post("/api/v1/scripts/{script_id}/approve", response_model=ApprovalResult)
