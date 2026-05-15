@@ -4,7 +4,15 @@ from .channel_memory import ChannelMemory
 from .ideas import Idea
 from .llm_logging import LLMCallLog
 from .research_brief import ResearchBrief
-from .scripts import ScriptDraft
+from .scripts import (
+    Script,
+    ScriptDraft,
+    ScriptQualityReport,
+    ScriptRepository,
+    ScriptSection,
+    ScriptState,
+    ScriptVersion,
+)
 
 __all__ = [
     "AIProvider",
@@ -14,5 +22,11 @@ __all__ = [
     "LLMCallLog",
     "MockProvider",
     "ResearchBrief",
+    "Script",
     "ScriptDraft",
+    "ScriptQualityReport",
+    "ScriptRepository",
+    "ScriptSection",
+    "ScriptState",
+    "ScriptVersion",
 ]
