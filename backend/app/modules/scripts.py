@@ -241,6 +241,48 @@ class ScriptRepository:
         hooks = self._hooks_by_script_id.get(script_id, [])
         return tuple(hooks)
 
+    def get_hook(self, hook_id: UUID) -> HookVariant:
+        for hooks in self._hooks_by_script_id.values():
+            for hook in hooks:
+                if hook.id == hook_id:
+                    return hook
+        raise KeyError(f"no hook found for hook_id={hook_id}")
+
+    def update_hook_score(
+        self,
+        hook_id: UUID,
+        *,
+        score: float | None = None,
+        risk_level: int | None = None,
+        notes: str | None = None,
+        selected: bool | None = None,
+    ) -> HookVariant:
+        for script_id, hooks in self._hooks_by_script_id.items():
+            for hook in hooks:
+                if hook.id != hook_id:
+                    continue
+
+                if score is not None:
+                    hook.score = score
+                if risk_level is not None:
+                    hook.risk_level = risk_level
+                if notes is not None:
+                    hook.notes = notes
+
+                now = datetime.now(UTC)
+                if selected is True:
+                    for script_hook in self._hooks_by_script_id.get(script_id, []):
+                        script_hook.selected = script_hook.id == hook_id
+                        script_hook.updated_at = now
+                elif selected is False:
+                    hook.selected = False
+                    hook.updated_at = now
+                else:
+                    hook.updated_at = now
+
+                return hook
+        raise KeyError(f"no hook found for hook_id={hook_id}")
+
     def select_hook(self, hook_id: UUID) -> HookVariant:
         for script_id, hooks in self._hooks_by_script_id.items():
             for hook in hooks:
@@ -259,9 +301,10 @@ class ScriptRepository:
         return normalized_review
 
     def get_latest_retention_review(self, script_id: UUID) -> RetentionReview | None:
-        reviews = self._retention_reviews_by_script_id.get(script_id, [])
-        return reviews[-1] if reviews else None
-
+        reviews = self._retention_reviews_by_script_id.get(script_id)
+        if not reviews:
+            return None
+        return max(reviews, key=lambda review: review.updated_at)
 
 class ScriptDraft(BaseModel):
     idea_id: str
