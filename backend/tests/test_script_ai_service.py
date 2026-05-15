@@ -58,3 +58,33 @@ def test_generation_with_mock_provider_and_scoring_and_improvement() -> None:
     improved = svc.improve_script(angle="approved-angle", channel_memory="mem", research_brief="brief", sections=draft.sections)
     assert improved.sections[0].title.lower() == "hook"
     assert all("Approved angle:" in prompt for prompt in provider.prompts)
+
+
+def test_generate_hooks_strict_schema_acceptance() -> None:
+    provider = MockProvider(
+        [
+            '{"variants":[{"type":"question","text":"Hook?","promise":"Promise","curiosity_gap":"Gap","risk_level":1,"score":8.5,"notes":"n","selected":false}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    hooks = svc.generate_hooks(angle="a", channel_memory="mem", sections=[])
+    assert hooks.variants[0].type == "question"
+    assert "Channel memory:" in provider.prompts[-1]
+
+
+def test_score_hook_malformed_json_rejected() -> None:
+    provider = MockProvider(["{"])
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="invalid JSON"):
+        svc.score_hook(angle="a", channel_memory="mem", hook_text="h", script_sections=[])
+
+
+def test_analyze_retention_unexpected_field_rejected() -> None:
+    provider = MockProvider(
+        [
+            '{"review":{"weak_intro_warning":false,"slow_context_warning":false,"payoff_delay_warning":false,"repeated_sentence_warning":false,"generic_section_warning":false,"unclear_promise_warning":false,"section_map":[],"recommendations":[],"timestamps":[],"unexpected":1}}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="did not match schema"):
+        svc.analyze_retention(angle="a", channel_memory="mem", sections=[])
