@@ -1,6 +1,6 @@
 from .ai_provider import AIProvider, MockProvider
 from .angle_approval import AngleStatus
-from .channel_memory import ChannelMemory
+from .channel_memory import ChannelMemory, ChannelMemoryRepository
 from .ideas import Idea
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
@@ -31,6 +31,7 @@ __all__ = [
     "AIProvider",
     "AngleStatus",
     "ChannelMemory",
+    "ChannelMemoryRepository",
     "DraftPayload",
     "HookScorePayload",
     "HookVariant",

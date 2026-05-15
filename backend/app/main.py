@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import HookVariant, RetentionReview, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from .modules import ChannelMemory, ChannelMemoryRepository, HookVariant, RetentionReview, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -20,6 +20,7 @@ class ErrorPayload(BaseModel):
 class GenerateScriptRequest(BaseModel):
     angle_id: str = Field(min_length=1)
     angle_status: str = Field(min_length=1)
+    channel_id: str = Field(min_length=1)
     allow_draft_without_approval: bool = False
 
 
@@ -61,9 +62,11 @@ class GateRule(BaseModel):
 
 class ScoreRequest(BaseModel):
     quality_report: ScriptQualityReport
+    channel_id: str = Field(default="default", min_length=1)
 
 
 class ImproveRequest(BaseModel):
+    channel_id: str = Field(default="default", min_length=1)
     editor_event: str = Field(default="ai-improve", min_length=1)
 
 
@@ -128,7 +131,11 @@ class GateFailed(Exception):
 
 repo = ScriptRepository()
 script_by_id: dict[UUID, Script] = {}
+channel_memory_repo = ChannelMemoryRepository()
 script_ai = ScriptAIService()
+
+# Seed sample memory for local/dev flows.
+channel_memory_repo.upsert(ChannelMemory(channel_id="default", tone_notes=["pragmatic", "specific"], banned_claims=["instant guaranteed growth"]))
 
 
 @app.get("/health")
@@ -157,6 +164,35 @@ def _basic_sections() -> list[ScriptSection]:
     ]
 
 
+
+
+
+
+def _api_error(status_code: int, code: str, message: str, details: dict[str, Any] | None = None) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=ErrorPayload(code=code, message=message, details=details or {}).model_dump())
+
+
+def _resolve_channel_memory_or_424(channel_id: str) -> ChannelMemory:
+    memory = channel_memory_repo.get(channel_id)
+    if memory is None:
+        raise _api_error(424, "CHANNEL_MEMORY_NOT_FOUND", "channel memory dependency missing", {"channel_id": channel_id})
+    return memory
+
+
+def _build_channel_memory_context(memory: ChannelMemory) -> str:
+    return f"channel_id={memory.channel_id}; tone_notes={memory.tone_notes}; banned_claims={memory.banned_claims}"
+
+
+def _build_script_context(script: Script) -> str:
+    section_map = [{"title": section.title, "content": section.content} for section in script.sections]
+    return f"script_id={script.id}; sections={section_map}"
+
+
+def _build_script_studio_context(*, channel_id: str, script: Script | None = None) -> tuple[str, str]:
+    memory = _resolve_channel_memory_or_424(channel_id)
+    channel_context = _build_channel_memory_context(memory)
+    script_context = _build_script_context(script) if script is not None else "script=none"
+    return channel_context, script_context
 
 
 def _get_script_or_404(script_id: UUID) -> Script:
@@ -200,10 +236,11 @@ def _enforce_approval_gates(script: Script, gates: GateRule) -> None:
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-outline", response_model=GenerateOutlineResponse)
 def generate_outline(idea_id: str, payload: GenerateScriptRequest) -> GenerateOutlineResponse:
     _ensure_angle_gate(payload)
+    channel_context, upstream_script_context = _build_script_studio_context(channel_id=payload.channel_id)
     outline_payload = script_ai.generate_outline(
         angle=payload.angle_id,
-        channel_memory="channel-memory-placeholder",
-        research_brief="research-brief-placeholder",
+        channel_memory=channel_context,
+        research_brief=upstream_script_context,
     )
     script = Script(
         idea_id=idea_id,
@@ -223,15 +260,16 @@ def generate_outline(idea_id: str, payload: GenerateScriptRequest) -> GenerateOu
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-draft", response_model=GenerateDraftResponse)
 def generate_draft(idea_id: str, payload: GenerateScriptRequest) -> GenerateDraftResponse:
     _ensure_angle_gate(payload)
+    channel_context, upstream_script_context = _build_script_studio_context(channel_id=payload.channel_id)
     outline_payload = script_ai.generate_outline(
         angle=payload.angle_id,
-        channel_memory="channel-memory-placeholder",
-        research_brief="research-brief-placeholder",
+        channel_memory=channel_context,
+        research_brief=upstream_script_context,
     )
     draft_payload = script_ai.generate_draft(
         angle=payload.angle_id,
-        channel_memory="channel-memory-placeholder",
-        research_brief="research-brief-placeholder",
+        channel_memory=_build_script_studio_context(channel_id=payload.channel_id)[0],
+        research_brief=_build_script_studio_context(channel_id=payload.channel_id)[1],
         outline=outline_payload,
     )
     script = Script(idea_id=idea_id, angle_id=payload.angle_id, sections=draft_payload.sections)
@@ -275,10 +313,11 @@ def score_script(script_id: UUID, payload: ScoreRequest) -> Script:
     script = script_by_id.get(script_id)
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    channel_context, script_context = _build_script_studio_context(channel_id=payload.channel_id, script=script)
     score_payload = script_ai.score_script(
         angle=script.angle_id,
-        channel_memory="channel-memory-placeholder",
-        research_brief="research-brief-placeholder",
+        channel_memory=channel_context,
+        research_brief=script_context,
         sections=script.sections,
     )
     updated = script.model_copy(update={"quality_report": score_payload.quality_report})
@@ -292,10 +331,11 @@ def improve_script(script_id: UUID, payload: ImproveRequest) -> Script:
     script = script_by_id.get(script_id)
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    channel_context, script_context = _build_script_studio_context(channel_id=payload.channel_id, script=script)
     improved_payload = script_ai.improve_script(
         angle=script.angle_id,
-        channel_memory="channel-memory-placeholder",
-        research_brief="research-brief-placeholder",
+        channel_memory=channel_context,
+        research_brief=script_context,
         sections=script.sections,
     )
     updated = script.model_copy(update={"sections": improved_payload.sections})
@@ -362,7 +402,8 @@ def override_script(script_id: UUID, payload: OverrideRequest) -> ApprovalResult
 @app.post("/api/v1/scripts/{script_id}/hooks/generate", response_model=GenerateHooksResponse)
 def generate_hooks(script_id: UUID) -> GenerateHooksResponse:
     script = _get_script_or_404(script_id)
-    generated = script_ai.generate_hook_variants(angle=script.angle_id, sections=script.sections)
+    channel_context, _ = _build_script_studio_context(channel_id="default", script=script)
+    generated = script_ai.generate_hooks(angle=script.angle_id, channel_memory=channel_context, sections=script.sections)
     hooks = list(repo.create_hook_variants(script_id, generated.variants))
     return GenerateHooksResponse(script_id=script_id, hooks=hooks)
 
@@ -378,7 +419,8 @@ def score_hook(hook_id: UUID) -> ScoreHookResponse:
     for script_id, script in script_by_id.items():
         for hook in repo.list_hooks(script_id):
             if hook.id == hook_id:
-                rescored = script_ai.score_hook_variant(angle=script.angle_id, hook_text=hook.text, script_sections=script.sections)
+                channel_context, _ = _build_script_studio_context(channel_id="default", script=script)
+                rescored = script_ai.score_hook(angle=script.angle_id, channel_memory=channel_context, hook_text=hook.text, script_sections=script.sections)
                 hook.score = rescored.score
                 hook.notes = rescored.notes
                 hook.risk_level = rescored.risk_level
@@ -398,7 +440,8 @@ def select_hook(hook_id: UUID) -> SelectHookResponse:
 @app.post("/api/v1/scripts/{script_id}/retention/analyze", response_model=AnalyzeRetentionResponse)
 def analyze_retention(script_id: UUID) -> AnalyzeRetentionResponse:
     script = _get_script_or_404(script_id)
-    analysis = script_ai.analyze_retention(angle=script.angle_id, sections=script.sections)
+    channel_context, _ = _build_script_studio_context(channel_id="default", script=script)
+    analysis = script_ai.analyze_retention(angle=script.angle_id, channel_memory=channel_context, sections=script.sections)
     review = repo.save_retention_review(script_id, analysis.review)
     return AnalyzeRetentionResponse(script_id=script_id, review=review)
 
