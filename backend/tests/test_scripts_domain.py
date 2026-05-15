@@ -1,8 +1,10 @@
 import pytest
 from pydantic import ValidationError
+from uuid import uuid4
 
 from app.main import GateFailed, GateRule, _enforce_approval_gates
-from app.modules import Script, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from app.modules import HookVariantCreate, RetentionReview, Script, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from app.modules.scripts import HookVariantType
 
 
 def _valid_sections() -> list[ScriptSection]:
@@ -66,3 +68,103 @@ def test_approval_gate_thresholds_and_banned_phrase_detection() -> None:
     with pytest.raises(GateFailed) as exc:
         _enforce_approval_gates(script3, GateRule())
     assert exc.value.code == "BANNED_PHRASES"
+
+
+def test_update_hook_score_success_and_missing_hook_error() -> None:
+    repo = ScriptRepository()
+    script = Script(idea_id="idea-hooks", angle_id="angle-hooks", sections=_valid_sections())
+    repo.create_script(script)
+    created = repo.create_hook_variants(
+        script.id,
+        [
+            HookVariantCreate(
+                type=HookVariantType.question,
+                text="What if your intro is losing viewers in 3 seconds?",
+                promise="Pinpoint the leaky opening beat.",
+                curiosity_gap="The drop-off reason is not what most creators assume.",
+                risk_level=1,
+                score=5.2,
+            )
+        ],
+    )[0]
+
+    updated = repo.update_hook_score(created.id, score=8.4, risk_level=2, notes="Improved opening clarity.")
+    assert updated.score == 8.4
+    assert updated.risk_level == 2
+    assert updated.notes == "Improved opening clarity."
+    assert updated.updated_at.tzinfo is not None
+
+    with pytest.raises(KeyError):
+        repo.update_hook_score(script.id, score=7.0)
+
+
+def test_selecting_one_hook_clears_other_selected_flags() -> None:
+    repo = ScriptRepository()
+    script = Script(idea_id="idea-select", angle_id="angle-select", sections=_valid_sections())
+    repo.create_script(script)
+    hooks = repo.create_hook_variants(
+        script.id,
+        [
+            HookVariantCreate(
+                type=HookVariantType.shock,
+                text="Most channels kill retention before the first sentence ends.",
+                promise="Reveal the exact mistake lowering watch time.",
+                curiosity_gap="It is hidden in one phrase almost everyone uses.",
+                risk_level=2,
+                score=7.1,
+                selected=True,
+            ),
+            HookVariantCreate(
+                type=HookVariantType.story,
+                text="I rewrote one opening and doubled average view duration.",
+                promise="Show the before/after hook structure.",
+                curiosity_gap="The biggest change was counterintuitive.",
+                risk_level=1,
+                score=7.8,
+                selected=False,
+            ),
+        ],
+    )
+    first, second = hooks
+    assert first.selected is True
+    assert second.selected is False
+
+    repo.update_hook_score(second.id, score=8.3, selected=True)
+    refreshed_first = repo.get_hook(first.id)
+    refreshed_second = repo.get_hook(second.id)
+    assert refreshed_first.selected is False
+    assert refreshed_second.selected is True
+
+
+def test_get_latest_retention_review_returns_newest_persisted_review() -> None:
+    repo = ScriptRepository()
+    script = Script(idea_id="idea-retention", angle_id="angle-retention", sections=_valid_sections())
+    repo.create_script(script)
+
+    review_one = RetentionReview(
+        weak_intro_warning=True,
+        slow_context_warning=False,
+        payoff_delay_warning=False,
+        repeated_sentence_warning=False,
+        generic_section_warning=False,
+        unclear_promise_warning=False,
+    )
+    saved_one = repo.save_retention_review(script.id, review_one)
+
+    review_two = RetentionReview(
+        weak_intro_warning=False,
+        slow_context_warning=True,
+        payoff_delay_warning=True,
+        repeated_sentence_warning=False,
+        generic_section_warning=False,
+        unclear_promise_warning=False,
+    )
+    saved_two = repo.save_retention_review(script.id, review_two)
+
+    latest = repo.get_latest_retention_review(script.id)
+    assert latest is not None
+    assert latest.updated_at >= saved_one.updated_at
+    assert latest.updated_at == saved_two.updated_at
+
+    assert repo.get_latest_retention_review(script.id) is not None
+    assert repo.get_latest_retention_review(uuid4()) is None
