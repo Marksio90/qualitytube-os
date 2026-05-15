@@ -4,8 +4,20 @@ from .channel_memory import ChannelMemory
 from .ideas import Idea
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
-from .script_ai import DraftPayload, ImprovementPayload, OutlinePayload, ScorePayload, ScriptAIService
+from .script_ai import (
+    DraftPayload,
+    HookScorePayload,
+    HookVariantsPayload,
+    ImprovementPayload,
+    OutlinePayload,
+    RetentionAnalysisPayload,
+    ScorePayload,
+    ScriptAIService,
+)
 from .scripts import (
+    HookVariant,
+    HookVariantCreate,
+    RetentionReview,
     Script,
     ScriptDraft,
     ScriptQualityReport,
@@ -20,6 +32,10 @@ __all__ = [
     "AngleStatus",
     "ChannelMemory",
     "DraftPayload",
+    "HookScorePayload",
+    "HookVariant",
+    "HookVariantCreate",
+    "HookVariantsPayload",
     "Idea",
     "ImprovementPayload",
     "LLMCall",
@@ -27,6 +43,8 @@ __all__ = [
     "MockProvider",
     "OutlinePayload",
     "ResearchBrief",
+    "RetentionAnalysisPayload",
+    "RetentionReview",
     "ScorePayload",
     "Script",
     "ScriptAIService",
