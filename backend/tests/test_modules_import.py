@@ -7,4 +7,6 @@ def test_module_exports() -> None:
     provider = MockProvider()
 
     assert script.idea_id == "i1"
-    assert provider.generate("hello").startswith("mock-response::")
+    response = provider.generate("hello")
+    assert response.startswith("{")
+    assert "sections" in response
