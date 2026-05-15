@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import Script, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from .modules import Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -90,6 +90,7 @@ class GateFailed(Exception):
 
 repo = ScriptRepository()
 script_by_id: dict[UUID, Script] = {}
+script_ai = ScriptAIService()
 
 
 @app.get("/health")
@@ -153,21 +154,41 @@ def _enforce_approval_gates(script: Script, gates: GateRule) -> None:
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-outline", response_model=GenerateOutlineResponse)
 def generate_outline(idea_id: str, payload: GenerateScriptRequest) -> GenerateOutlineResponse:
     _ensure_angle_gate(payload)
-    script = Script(idea_id=idea_id, angle_id=payload.angle_id, sections=_basic_sections())
+    outline_payload = script_ai.generate_outline(
+        angle=payload.angle_id,
+        channel_memory="channel-memory-placeholder",
+        research_brief="research-brief-placeholder",
+    )
+    script = Script(
+        idea_id=idea_id,
+        angle_id=payload.angle_id,
+        sections=[
+            ScriptSection(title="hook", content=outline_payload.hook),
+            ScriptSection(title="body", content=" ".join(outline_payload.beats)),
+            ScriptSection(title="cta", content=outline_payload.cta),
+        ],
+    )
     repo.create_script(script, editor_event="generate-outline")
     script_by_id[script.id] = script
-    outline = StructuredOutline(
-        hook="Counterintuitive opening tied to measurable creator pain.",
-        beats=["Expose hidden bottleneck", "Demonstrate proof pattern", "Provide 3-step execution"],
-        cta="Invite a single tactical experiment and accountability comment.",
-    )
+    outline = StructuredOutline(hook=outline_payload.hook, beats=outline_payload.beats, cta=outline_payload.cta)
     return GenerateOutlineResponse(script=script, outline=outline)
 
 
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-draft", response_model=GenerateDraftResponse)
 def generate_draft(idea_id: str, payload: GenerateScriptRequest) -> GenerateDraftResponse:
     _ensure_angle_gate(payload)
-    script = Script(idea_id=idea_id, angle_id=payload.angle_id, sections=_basic_sections())
+    outline_payload = script_ai.generate_outline(
+        angle=payload.angle_id,
+        channel_memory="channel-memory-placeholder",
+        research_brief="research-brief-placeholder",
+    )
+    draft_payload = script_ai.generate_draft(
+        angle=payload.angle_id,
+        channel_memory="channel-memory-placeholder",
+        research_brief="research-brief-placeholder",
+        outline=outline_payload,
+    )
+    script = Script(idea_id=idea_id, angle_id=payload.angle_id, sections=draft_payload.sections)
     repo.create_script(script, editor_event="generate-draft")
     script_by_id[script.id] = script
     return GenerateDraftResponse(script=script)
@@ -208,7 +229,13 @@ def score_script(script_id: UUID, payload: ScoreRequest) -> Script:
     script = script_by_id.get(script_id)
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
-    updated = script.model_copy(update={"quality_report": payload.quality_report})
+    score_payload = script_ai.score_script(
+        angle=script.angle_id,
+        channel_memory="channel-memory-placeholder",
+        research_brief="research-brief-placeholder",
+        sections=script.sections,
+    )
+    updated = script.model_copy(update={"quality_report": score_payload.quality_report})
     repo.revise_script(script.idea_id, updated, "score")
     script_by_id[script_id] = updated
     return updated
@@ -219,9 +246,13 @@ def improve_script(script_id: UUID, payload: ImproveRequest) -> Script:
     script = script_by_id.get(script_id)
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
-    sections = list(script.sections)
-    sections[0] = sections[0].model_copy(update={"content": sections[0].content + " This adds a sharper curiosity gap."})
-    updated = script.model_copy(update={"sections": sections})
+    improved_payload = script_ai.improve_script(
+        angle=script.angle_id,
+        channel_memory="channel-memory-placeholder",
+        research_brief="research-brief-placeholder",
+        sections=script.sections,
+    )
+    updated = script.model_copy(update={"sections": improved_payload.sections})
     repo.revise_script(script.idea_id, updated, payload.editor_event)
     script_by_id[script_id] = updated
     return updated
