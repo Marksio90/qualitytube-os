@@ -1,6 +1,6 @@
 import pytest
 
-from app.modules.script_ai import ScriptAIService
+from app.modules.script_ai import OutlinePayload, ScriptAIService
 
 
 class BadProvider:
@@ -10,7 +10,51 @@ class BadProvider:
         return "not-json"
 
 
+class MockProvider:
+    model = "mock"
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.prompts: list[str] = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self.responses.pop(0)
+
+
 def test_strict_json_failure_raises() -> None:
     svc = ScriptAIService(provider=BadProvider())
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid JSON"):
         svc.generate_outline(angle="a", channel_memory="m", research_brief="r")
+
+
+def test_strict_json_schema_mismatch_raises() -> None:
+    provider = MockProvider(['{"hook":"x", "beats": ["a", "b", "c"], "cta": "ok", "extra": 1}'])
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="did not match schema"):
+        svc.generate_outline(angle="a", channel_memory="m", research_brief="r")
+
+
+def test_generation_with_mock_provider_and_scoring_and_improvement() -> None:
+    provider = MockProvider(
+        [
+            '{"hook":"Hook line strong", "beats": ["beat one details", "beat two details", "beat three details"], "cta": "comment your take"}',
+            '{"sections": [{"title": "hook", "content": "This hook is long enough to pass validation and feel specific."}, {"title": "body", "content": "This body includes concrete details, examples, and pacing for retention."}, {"title": "cta", "content": "Comment your workflow and subscribe for the next breakdown."}]}',
+            '{"quality_report": {"hook_score": 8, "clarity_score": 7.5, "narrative_tension_score": 7.2, "originality_score": 7.1, "retention_score": 7.8, "evidence_score": 7.7, "human_voice_score": 8.1, "cta_quality_score": 7.3, "overall_script_score": 7.6}}',
+            '{"sections": [{"title": "hook", "content": "Improved hook with urgency and a concrete promised payoff for viewers."}, {"title": "body", "content": "Improved body now contains examples, transitions, and concise narrative beats."}, {"title": "cta", "content": "Ask viewers to test one tactic and report measurable outcomes below."}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+
+    outline = svc.generate_outline(angle="approved-angle", channel_memory="mem", research_brief="brief")
+    assert isinstance(outline, OutlinePayload)
+
+    draft = svc.generate_draft(angle="approved-angle", channel_memory="mem", research_brief="brief", outline=outline)
+    assert len(draft.sections) == 3
+
+    score = svc.score_script(angle="approved-angle", channel_memory="mem", research_brief="brief", sections=draft.sections)
+    assert score.quality_report.overall_script_score == 7.6
+
+    improved = svc.improve_script(angle="approved-angle", channel_memory="mem", research_brief="brief", sections=draft.sections)
+    assert improved.sections[0].title.lower() == "hook"
+    assert all("Approved angle:" in prompt for prompt in provider.prompts)
