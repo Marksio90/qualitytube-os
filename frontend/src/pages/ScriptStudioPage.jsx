@@ -23,6 +23,9 @@ export function ScriptStudioPage() {
   const [actionError, setActionError] = useState("");
   const [revisionData, setRevisionData] = useState({ loading: false, error: "", items: [] });
   const [selectedRevision, setSelectedRevision] = useState("");
+  const [activeTab, setActiveTab] = useState("editor");
+  const [hooksData, setHooksData] = useState({ loading: false, error: "", items: [], selectedId: "" });
+  const [retentionData, setRetentionData] = useState({ loading: false, error: "", analysis: null });
 
   const warnings = useMemo(() => {
     if (!script) return [];
@@ -108,6 +111,37 @@ export function ScriptStudioPage() {
     }
   }
 
+  async function generateHooks() {
+    setHooksData((prev) => ({ ...prev, loading: true, error: "" }));
+    try {
+      const data = await api(`/api/v1/scripts/${script.id}/hooks/generate`, { method: "POST", body: JSON.stringify({}) });
+      setHooksData((prev) => ({ ...prev, loading: false, error: "", items: data.hooks || [] }));
+    } catch (e) {
+      setHooksData((prev) => ({ ...prev, loading: false, error: e.message, items: [] }));
+    }
+  }
+
+  async function selectPrimaryHook(hookId) {
+    setHooksData((prev) => ({ ...prev, loading: true, error: "" }));
+    try {
+      const data = await api(`/api/v1/scripts/${script.id}/hooks/select-primary`, { method: "POST", body: JSON.stringify({ hook_id: hookId }) });
+      setHooksData((prev) => ({ ...prev, loading: false, error: "", selectedId: hookId, items: data.hooks || prev.items }));
+      if (data.script) setScript(data.script);
+    } catch (e) {
+      setHooksData((prev) => ({ ...prev, loading: false, error: e.message }));
+    }
+  }
+
+  async function analyzeRetention() {
+    setRetentionData({ loading: true, error: "", analysis: null });
+    try {
+      const data = await api(`/api/v1/scripts/${script.id}/retention/analyze`, { method: "POST", body: JSON.stringify({}) });
+      setRetentionData({ loading: false, error: "", analysis: data.analysis || null });
+    } catch (e) {
+      setRetentionData({ loading: false, error: e.message, analysis: null });
+    }
+  }
+
   if (loading) return <main><h1>Script Studio</h1><p>Loading script workspace…</p></main>;
   if (error) return <main><h1>Script Studio</h1><p role="alert">Failed to load: {error}</p></main>;
   if (!script) return <main><h1>Script Studio</h1><p>No script available yet.</p></main>;
@@ -119,7 +153,11 @@ export function ScriptStudioPage() {
       <h1>Script Studio</h1>
       <p>Approval state: <strong>{script.state}</strong></p>
       {actionError && <p role="alert">Action failed: {actionError}</p>}
-      <section style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button onClick={() => setActiveTab("editor")} aria-pressed={activeTab === "editor"}>Editor</button>
+        <button onClick={() => setActiveTab("hooks")} aria-pressed={activeTab === "hooks"}>Hook & Retention</button>
+      </div>
+      {activeTab === "editor" && <section style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 16 }}>
         <aside>
           <h2>Outline & History</h2>
           <ol>{script.sections.map((s) => <li key={s.title}>{s.title}</li>)}</ol>
@@ -163,7 +201,49 @@ export function ScriptStudioPage() {
           <button disabled={saving} onClick={() => runAction("approve", {})}>Approve</button>
           <button disabled={saving} onClick={() => runAction("override", { reason: "Manual override", approver: "studio-user" })}>Override Approve</button>
         </aside>
-      </section>
+      </section>}
+
+      {activeTab === "hooks" && (
+        <section>
+          <h2>Hook & Retention</h2>
+          <div>
+            <h3>Hooks</h3>
+            <button disabled={hooksData.loading} onClick={generateHooks}>{hooksData.loading ? "Generating hooks…" : "Generate hook variants"}</button>
+            {hooksData.error && <p role="alert">Hook action failed: {hooksData.error}</p>}
+            {!hooksData.loading && !hooksData.error && hooksData.items.length === 0 && <p>No hooks generated yet.</p>}
+            {!hooksData.loading && hooksData.items.length > 0 && (
+              <table>
+                <thead><tr><th>Type</th><th>Text</th><th>Score</th><th>Risk</th><th>Notes</th><th>Action</th></tr></thead>
+                <tbody>
+                  {hooksData.items.map((hook) => (
+                    <tr key={hook.id}>
+                      <td>{hook.type}</td><td>{hook.text}</td><td>{hook.score}</td><td>{hook.risk}</td><td>{hook.notes}</td>
+                      <td><button disabled={hooksData.loading} onClick={() => selectPrimaryHook(hook.id)}>{hooksData.selectedId === hook.id ? "Primary selected" : "Select primary hook"}</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div>
+            <h3>Retention</h3>
+            <button disabled={retentionData.loading} onClick={analyzeRetention}>{retentionData.loading ? "Analyzing retention…" : "Retention analysis"}</button>
+            {retentionData.error && <p role="alert">Retention action failed: {retentionData.error}</p>}
+            {!retentionData.loading && !retentionData.error && !retentionData.analysis && <p>No retention analysis yet.</p>}
+            {retentionData.analysis && (
+              <>
+                <h4>Warnings</h4>
+                <ul>{(retentionData.analysis.warnings || []).map((w) => <li key={w}>{w}</li>)}</ul>
+                <h4>Recommendations</h4>
+                <ul>{(retentionData.analysis.recommendations || []).map((r) => <li key={r}>{r}</li>)}</ul>
+                <h4>Section Map</h4>
+                <ul>{(retentionData.analysis.section_map || []).map((s) => <li key={s.section}>{s.section}: {s.risk}</li>)}</ul>
+              </>
+            )}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
