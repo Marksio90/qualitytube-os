@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -362,6 +362,10 @@ class PublishingPackageValidationResponse(BaseModel):
     result: PublishingValidationResult
 
 
+class PublishingPackageExportRequest(BaseModel):
+    format: str = Field(min_length=1)
+
+
 class PublishingPackageExportResponse(BaseModel):
     format: str
     content: str | dict[str, Any]
@@ -451,6 +455,7 @@ class PublishingPackageService:
 
 
 publishing_service = PublishingPackageService(publishing_repo)
+publishing_export_service = PublishingPackageExportService()
 
 
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-outline", response_model=GenerateOutlineResponse)
@@ -778,32 +783,25 @@ def list_publishing_package_revisions(idea_id: str) -> dict[str, Any]:
     return {"revisions": [revision.model_dump(mode="json") for revision in revisions]}
 
 
-@app.get("/api/v1/ideas/{idea_id}/publishing-package/export", response_model=PublishingPackageExportResponse)
-def export_publishing_package(idea_id: str, format: str = "json") -> PublishingPackageExportResponse:
-    package = publishing_repo.get_package(idea_id)
+@app.post("/api/v1/publishing-packages/{package_id}/export", response_model=PublishingPackageExportResponse)
+def export_publishing_package(package_id: UUID, payload: PublishingPackageExportRequest) -> PublishingPackageExportResponse:
+    package = publishing_repo.get_package_by_id(package_id)
     if package is None:
-        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
-    normalized = format.strip().lower()
-    if normalized == "markdown":
-        markdown = "\n".join(
-            [
-                f"# {package.title}",
-                "",
-                "## Description",
-                package.description,
-                "",
-                "## Tags",
-                ", ".join(package.tags),
-                "",
-                "## Chapters",
-                *[f"- {chapter}" for chapter in package.chapters],
-                "",
-                "## Upload Checklist",
-                *[f"- [ ] {item}" for item in package.upload_checklist],
-            ]
-        )
-        return PublishingPackageExportResponse(format="markdown", content=markdown)
-    return PublishingPackageExportResponse(format="json", content=package.model_dump(mode="json"))
+        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"package_id": str(package_id)})
+
+    requested = payload.format.strip().lower()
+    try:
+        export_format = PublishingPackageExportFormat(requested)
+    except ValueError as exc:
+        raise _api_error(
+            422,
+            "UNSUPPORTED_EXPORT_FORMAT",
+            "unsupported export format",
+            {"received_format": requested, "supported_formats": [fmt.value for fmt in PublishingPackageExportFormat]},
+        ) from exc
+
+    content = publishing_export_service.export(package, export_format)
+    return PublishingPackageExportResponse(format=export_format.value, content=content)
 
 
 @app.post("/api/v1/compliance/{report_id}/override", response_model=ComplianceReportResponse)

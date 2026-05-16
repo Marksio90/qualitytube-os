@@ -161,3 +161,59 @@ def test_compliance_override_persists_audit_and_exposes_manual_override_state() 
     listed = client.get("/api/v1/ideas/idea-compliance-override/compliance/reports")
     assert listed.status_code == 200
     assert listed.json()["reports"][-1]["is_manually_overridden"] is True
+
+def test_export_publishing_package_json_and_markdown() -> None:
+    from app.main import publishing_repo
+    from app.modules import PublishingPackage
+
+    package = PublishingPackage(
+        idea_id="idea-export",
+        title="Canonical Export Title",
+        description="Canonical export description.",
+        tags=["alpha", "beta"],
+        chapters=["00:00 - Intro", "00:30 - Topic"],
+        pinned_comment="Remember to subscribe.",
+        thumbnail_brief="Creator close-up with bold text.",
+        disclosure_notes="AI-assisted visual polish.",
+        source_notes="Sources verified in docs.",
+        upload_checklist=["Add end screen", "Verify links"],
+    )
+    try:
+        publishing_repo.create_package(package, editor_event="test-export")
+    except ValueError:
+        pass
+
+    json_resp = client.post(f"/api/v1/publishing-packages/{package.id}/export", json={"format": "json"})
+    assert json_resp.status_code == 200
+    assert json_resp.json()["format"] == "json"
+    assert json_resp.json()["content"]["title"] == "Canonical Export Title"
+
+    md_resp = client.post(f"/api/v1/publishing-packages/{package.id}/export", json={"format": "markdown"})
+    assert md_resp.status_code == 200
+    markdown = md_resp.json()["content"]
+    assert markdown.index("## Title") < markdown.index("## Description") < markdown.index("## Tags")
+    assert markdown.index("## Chapters") < markdown.index("## Pinned Comment") < markdown.index("## Thumbnail Brief")
+    assert markdown.index("## Disclosure Notes") < markdown.index("## Source Notes") < markdown.index("## Checklist") < markdown.index("## Status")
+
+
+def test_export_publishing_package_rejects_unsupported_format() -> None:
+    from app.main import publishing_repo
+    from app.modules import PublishingPackage
+
+    package = PublishingPackage(
+        idea_id="idea-export-format-error",
+        title="Format Error Title",
+        description="Desc",
+        thumbnail_brief="Thumb brief",
+    )
+    try:
+        publishing_repo.create_package(package, editor_event="test-export-format")
+    except ValueError:
+        pass
+
+    response = client.post(f"/api/v1/publishing-packages/{package.id}/export", json={"format": "xml"})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "UNSUPPORTED_EXPORT_FORMAT"
+    assert detail["details"]["received_format"] == "xml"
+    assert set(detail["details"]["supported_formats"]) == {"json", "markdown"}
