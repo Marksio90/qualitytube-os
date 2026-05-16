@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailLabRepository, TitleVariant, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -116,6 +116,56 @@ class SelectHookResponse(BaseModel):
     hook: HookVariant
 
 
+class GenerateIdeaTitlesRequest(BaseModel):
+    angle_status: str = Field(min_length=1)
+
+
+class GenerateIdeaTitlesResponse(BaseModel):
+    idea_id: str
+    titles: list[TitleVariant]
+
+
+class ScoreTitleRequest(BaseModel):
+    clarity_score: float = Field(ge=0.0, le=10.0)
+    curiosity_score: float = Field(ge=0.0, le=10.0)
+    truthfulness_score: float = Field(ge=0.0, le=10.0)
+    promise_match_score: float = Field(ge=0.0, le=10.0)
+    clickbait_risk: float = Field(ge=0.0, le=10.0)
+    rationale: str | None = None
+    warnings: str | None = None
+
+
+class ScoreTitleResponse(BaseModel):
+    title: TitleVariant
+
+
+class SelectTitleResponse(BaseModel):
+    title: TitleVariant
+
+
+class ListTitlesResponse(BaseModel):
+    idea_id: str
+    titles: list[TitleVariant]
+
+
+class GenerateThumbnailBriefsRequest(BaseModel):
+    angle_status: str = Field(min_length=1)
+
+
+class GenerateThumbnailBriefsResponse(BaseModel):
+    idea_id: str
+    thumbnails: list[ThumbnailConcept]
+
+
+class SelectThumbnailResponse(BaseModel):
+    thumbnail: ThumbnailConcept
+
+
+class ListThumbnailsResponse(BaseModel):
+    idea_id: str
+    thumbnails: list[ThumbnailConcept]
+
+
 class AnalyzeRetentionResponse(BaseModel):
     script_id: UUID
     review: RetentionReview
@@ -163,6 +213,7 @@ script_ai = ScriptAIService()
 compliance_reports_by_idea: dict[str, list[ComplianceReport]] = {}
 compliance_reports_by_id: dict[UUID, ComplianceReport] = {}
 publishing_repo = PublishingPackageRepository()
+title_thumbnail_repo = TitleThumbnailLabRepository()
 
 
 # Seed sample memory for local/dev flows.
@@ -289,6 +340,16 @@ def _get_script_or_404(script_id: UUID) -> Script:
     script = script_by_id.get(script_id)
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
+    return script
+
+
+def _approved_script_or_409(idea_id: str) -> Script:
+    script = repo.get_script(idea_id)
+    if script is None or script.state != ScriptState.approved:
+        details: dict[str, Any] = {"idea_id": idea_id}
+        if script is not None:
+            details["script_state"] = script.state.value
+        raise _api_error(409, "SCRIPT_APPROVAL_REQUIRED", "approved script is required before this operation", details)
     return script
 
 
@@ -662,6 +723,120 @@ def select_hook(hook_id: UUID) -> SelectHookResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="HOOK_NOT_FOUND", message="hook not found").model_dump()) from exc
     return SelectHookResponse(hook=hook)
+
+
+@app.post("/api/v1/ideas/{idea_id}/titles/generate", response_model=GenerateIdeaTitlesResponse)
+def generate_titles(idea_id: str, payload: GenerateIdeaTitlesRequest) -> GenerateIdeaTitlesResponse:
+    _ensure_angle_gate(
+        GenerateScriptRequest(angle_id="approved-angle", angle_status=payload.angle_status, channel_id="default", allow_draft_without_approval=False)
+    )
+    script = _approved_script_or_409(idea_id)
+    body_text = " ".join(section.content for section in script.sections)
+    base = body_text[:70] if body_text else "High-impact creator system"
+    generated = [
+        TitleVariant(
+            idea_id=idea_id,
+            title_text=f"{base} — Practical breakdown",
+            clarity_score=8.2,
+            curiosity_score=7.9,
+            truthfulness_score=8.6,
+            promise_match_score=8.1,
+            clickbait_risk=2.1,
+            overall_title_score=8.2,
+            rationale="Aligned with script promise and concrete takeaway.",
+        ),
+        TitleVariant(
+            idea_id=idea_id,
+            title_text=f"What most creators miss about {base[:40]}",
+            clarity_score=7.7,
+            curiosity_score=8.5,
+            truthfulness_score=8.1,
+            promise_match_score=7.8,
+            clickbait_risk=2.8,
+            overall_title_score=8.0,
+            rationale="Raises a strong gap while staying truthful.",
+        ),
+    ]
+    created = [title_thumbnail_repo.create_title_variant(item) for item in generated]
+    return GenerateIdeaTitlesResponse(idea_id=idea_id, titles=created)
+
+
+@app.post("/api/v1/titles/{title_id}/score", response_model=ScoreTitleResponse)
+def score_title(title_id: UUID, payload: ScoreTitleRequest) -> ScoreTitleResponse:
+    for idea_titles in (title_thumbnail_repo.list_title_variants(idea_id) for idea_id in {s.idea_id for s in script_by_id.values()}):
+        for title in idea_titles:
+            if title.id == title_id:
+                overall = (payload.clarity_score + payload.curiosity_score + payload.truthfulness_score + payload.promise_match_score + (10 - payload.clickbait_risk)) / 5
+                updated = title.model_copy(update={**payload.model_dump(), "overall_title_score": round(overall, 2)})
+                title_thumbnail_repo.update_title_variant(updated)
+                return ScoreTitleResponse(title=updated)
+    raise _api_error(404, "TITLE_NOT_FOUND", "title not found", {"title_id": str(title_id)})
+
+
+@app.post("/api/v1/titles/{title_id}/select", response_model=SelectTitleResponse)
+def select_title(title_id: UUID) -> SelectTitleResponse:
+    for idea_id in {script.idea_id for script in script_by_id.values()}:
+        try:
+            selected = title_thumbnail_repo.select_title_variant(idea_id, title_id)
+            return SelectTitleResponse(title=selected)
+        except KeyError:
+            continue
+    raise _api_error(404, "TITLE_NOT_FOUND", "title not found", {"title_id": str(title_id)})
+
+
+@app.get("/api/v1/ideas/{idea_id}/titles", response_model=ListTitlesResponse)
+def list_titles(idea_id: str) -> ListTitlesResponse:
+    return ListTitlesResponse(idea_id=idea_id, titles=list(title_thumbnail_repo.list_title_variants(idea_id)))
+
+
+@app.post("/api/v1/ideas/{idea_id}/thumbnails/generate-briefs", response_model=GenerateThumbnailBriefsResponse)
+def generate_thumbnail_briefs(idea_id: str, payload: GenerateThumbnailBriefsRequest) -> GenerateThumbnailBriefsResponse:
+    _ensure_angle_gate(
+        GenerateScriptRequest(angle_id="approved-angle", angle_status=payload.angle_status, channel_id="default", allow_draft_without_approval=False)
+    )
+    _approved_script_or_409(idea_id)
+    concepts = [
+        ThumbnailConcept(
+            idea_id=idea_id,
+            main_object="Creator dashboard with steep growth line",
+            emotion="Urgency with confidence",
+            composition="Subject on right third, graph spike on left, bold contrast lighting",
+            text_overlay="STOP Guessing",
+            visual_contrast="Neon green graph against dark blue background",
+            mobile_readability_notes="Keep overlay to two short words, 12% top margin",
+            avoid="No tiny text, no cluttered analytics tables",
+            score=8.4,
+        ),
+        ThumbnailConcept(
+            idea_id=idea_id,
+            main_object="Before/after channel performance split",
+            emotion="Surprise",
+            composition="Vertical split with dramatic expression and metrics badge",
+            text_overlay="Before / After",
+            visual_contrast="Warm red left side, cool teal right side",
+            mobile_readability_notes="Large face crop with high edge contrast",
+            avoid="No more than one badge and one arrow",
+            score=8.1,
+        ),
+    ]
+    created = [title_thumbnail_repo.create_thumbnail_concept(item) for item in concepts]
+    return GenerateThumbnailBriefsResponse(idea_id=idea_id, thumbnails=created)
+
+
+@app.post("/api/v1/thumbnails/{thumbnail_id}/select", response_model=SelectThumbnailResponse)
+def select_thumbnail(thumbnail_id: UUID) -> SelectThumbnailResponse:
+    for idea_id in {script.idea_id for script in script_by_id.values()}:
+        try:
+            selected = title_thumbnail_repo.select_thumbnail_concept(idea_id, thumbnail_id)
+            return SelectThumbnailResponse(thumbnail=selected)
+        except KeyError:
+            continue
+    raise _api_error(404, "THUMBNAIL_NOT_FOUND", "thumbnail not found", {"thumbnail_id": str(thumbnail_id)})
+
+
+@app.get("/api/v1/ideas/{idea_id}/thumbnails", response_model=ListThumbnailsResponse)
+def list_thumbnails(idea_id: str) -> ListThumbnailsResponse:
+    return ListThumbnailsResponse(idea_id=idea_id, thumbnails=list(title_thumbnail_repo.list_thumbnail_concepts(idea_id)))
 
 
 @app.post("/api/v1/scripts/{script_id}/retention/analyze", response_model=AnalyzeRetentionResponse)
