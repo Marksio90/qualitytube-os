@@ -8,7 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .ai_provider import AIProvider, MockProvider
-from .compliance import ComplianceRecommendation, RiskLevel
+from .compliance import ComplianceRecommendation, ComplianceReport, RiskLevel
 from .llm_logging import LLMCall, LLMCallLogger
 from .scripts import HookVariantType, RetentionReview, ScriptQualityReport, ScriptSection
 
@@ -87,6 +87,21 @@ class ComplianceReviewPayload(BaseModel):
     recommendation: ComplianceRecommendation
     required_fixes: list[str]
     reviewer_notes: str
+
+
+class PublishingPackagePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    description: str
+    tags: list[str]
+    chapters: list[str]
+    pinned_comment: str | None = None
+    thumbnail_brief: str
+    disclosure_notes: str | None = None
+    source_notes: str | None = None
+    upload_checklist: list[str]
+    promise_alignment_notes: list[str]
 
 
 class ScriptAIService:
@@ -177,6 +192,56 @@ class ScriptAIService:
             "Do not include any legal guarantees or disclaimers."
         )
         parsed = self._parse_strict_json(self._call(prompt=prompt, operation="compliance_review"), ComplianceReviewPayload)
+        return parsed  # type: ignore[return-value]
+
+    @staticmethod
+    def _normalize_words(text: str) -> set[str]:
+        normalized = "".join(char.lower() if char.isalnum() else " " for char in text)
+        return {part for part in normalized.split() if len(part) >= 4}
+
+    def _validate_title_script_promise_consistency(
+        self, *, title: str, promise_alignment_notes: list[str], approved_script_sections: list[ScriptSection]
+    ) -> None:
+        title_tokens = self._normalize_words(title)
+        script_tokens = self._normalize_words(" ".join(section.content for section in approved_script_sections))
+        if title_tokens and not (title_tokens & script_tokens):
+            raise ValueError("generated publishing package title is not consistent with approved script content")
+        if not promise_alignment_notes:
+            raise ValueError("generated publishing package must include promise_alignment_notes")
+
+    def generate_publishing_package(
+        self,
+        *,
+        approved_angle: str,
+        approved_script_sections: list[ScriptSection],
+        compliance_report: ComplianceReport,
+    ) -> PublishingPackagePayload:
+        sections_json = json.dumps([section.model_dump() for section in approved_script_sections])
+        compliance_json = compliance_report.model_dump_json()
+        schema_json = json.dumps(PublishingPackagePayload.model_json_schema(), separators=(",", ":"))
+        prompt = (
+            "Generate a YouTube publishing package in strict JSON only.\n"
+            f"Approved angle: {approved_angle}\n"
+            f"Approved script sections: {sections_json}\n"
+            f"Compliance report: {compliance_json}\n\n"
+            "Content constraints:\n"
+            "- Keep title promise fully aligned with the script hook/body payoff; no exaggerated claims.\n"
+            "- Include promise_alignment_notes listing concrete title-to-script consistency checks.\n"
+            "- Chapters must use 'mm:ss - title' or 'hh:mm:ss - title' format.\n"
+            "- Respect compliance findings, especially required_fixes and synthetic disclosure requirements.\n"
+            "- If synthetic_content_disclosure_required is true, include disclosure_notes.\n\n"
+            "Return strict JSON only.\n"
+            f"Schema: {schema_json}"
+        )
+        parsed = self._parse_strict_json(
+            self._call(prompt=prompt, operation="publishing_package_generation"),
+            PublishingPackagePayload,
+        )
+        self._validate_title_script_promise_consistency(
+            title=parsed.title,
+            promise_alignment_notes=parsed.promise_alignment_notes,
+            approved_script_sections=approved_script_sections,
+        )
         return parsed  # type: ignore[return-value]
 
     # Backwards-compatible wrappers.
