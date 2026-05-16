@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageRepository, PublishingPackageStatus, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -162,6 +162,7 @@ channel_memory_repo = ChannelMemoryRepository()
 script_ai = ScriptAIService()
 compliance_reports_by_idea: dict[str, list[ComplianceReport]] = {}
 compliance_reports_by_id: dict[UUID, ComplianceReport] = {}
+publishing_repo = PublishingPackageRepository()
 
 
 # Seed sample memory for local/dev flows.
@@ -335,6 +336,90 @@ def _enforce_approval_gates(script: Script, gates: GateRule) -> None:
             "hook score below approval threshold",
             {"metric": "hook_score", "required": gates.min_hook_score, "actual": report.hook_score},
         )
+
+
+class PublishingPackageGenerateRequest(BaseModel):
+    angle_status: str = Field(min_length=1)
+
+
+class PublishingPackageUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    chapters: list[str] | None = None
+    pinned_comment: str | None = None
+    thumbnail_brief: str | None = None
+    disclosure_notes: str | None = None
+    source_notes: str | None = None
+    upload_checklist: list[str] | None = None
+
+
+class PublishingPackageApproveRequest(BaseModel):
+    angle_status: str = Field(min_length=1)
+
+
+class PublishingPackageExportResponse(BaseModel):
+    format: str
+    content: str | dict[str, Any]
+
+
+class PublishingPackageService:
+    def __init__(self, repository: PublishingPackageRepository) -> None:
+        self.repository = repository
+
+    def _latest_script_or_409(self, idea_id: str) -> Script:
+        script = repo.get_script(idea_id)
+        if script is None:
+            raise _api_error(409, "SCRIPT_APPROVAL_REQUIRED", "approved script is required before publishing package operations", {"idea_id": idea_id})
+        if script.state != ScriptState.approved:
+            raise _api_error(409, "SCRIPT_APPROVAL_REQUIRED", "approved script is required before publishing package operations", {"idea_id": idea_id, "script_state": script.state.value})
+        return script
+
+    def _approved_compliance_or_409(self, idea_id: str) -> ComplianceReport:
+        report = _latest_compliance_report_or_409(idea_id)
+        if report.approval_state != ApprovalState.approved:
+            raise _api_error(409, "COMPLIANCE_APPROVAL_REQUIRED", "approved compliance report is required", {"idea_id": idea_id, "report_id": str(report.id)})
+        return report
+
+    def _assert_angle_approved(self, angle_status: str) -> None:
+        if angle_status.lower().strip() != "approved":
+            raise _api_error(409, "ANGLE_NOT_APPROVED", "approved angle is required", {"required_status": "approved", "received_status": angle_status})
+
+    def generate(self, idea_id: str, angle_status: str) -> PublishingPackage:
+        self._assert_angle_approved(angle_status)
+        script = self._latest_script_or_409(idea_id)
+        report = self._approved_compliance_or_409(idea_id)
+        package = PublishingPackage(
+            idea_id=idea_id,
+            title=f"{script.angle_id}: Final Video",
+            description="\n\n".join(f"{section.title.title()}: {section.content}" for section in script.sections),
+            tags=["qualitytube", "education"],
+            chapters=["00:00 - Intro", "00:30 - Main Insight", "04:00 - Action Plan"],
+            thumbnail_brief="Close-up creator face + high-contrast text with one contrarian claim",
+            upload_checklist=["Final proofread", "Sources linked", "Disclosure reviewed"],
+            latest_compliance=report,
+            status=PublishingPackageStatus.ready_for_review,
+        )
+        try:
+            return self.repository.create_package(package, editor_event="generate")
+        except ValueError as exc:
+            raise _api_error(409, "PUBLISHING_PACKAGE_EXISTS", "publishing package already exists for idea", {"idea_id": idea_id}) from exc
+
+    def approve(self, idea_id: str, angle_status: str) -> PublishingPackage:
+        self._assert_angle_approved(angle_status)
+        self._latest_script_or_409(idea_id)
+        report = self._approved_compliance_or_409(idea_id)
+        if report.overall_risk == RiskLevel.high:
+            raise _api_error(409, "PUBLISHING_APPROVAL_BLOCKED", "cannot approve publishing package when compliance overall_risk is high", {"idea_id": idea_id, "report_id": str(report.id), "overall_risk": report.overall_risk.value})
+        existing = self.repository.get_package(idea_id)
+        if existing is None:
+            raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+        updated = existing.model_copy(update={"status": PublishingPackageStatus.approved, "latest_compliance": report})
+        self.repository.revise_package(idea_id, updated, "approve")
+        return updated
+
+
+publishing_service = PublishingPackageService(publishing_repo)
 
 
 @app.post("/api/v1/ideas/{idea_id}/scripts/generate-outline", response_model=GenerateOutlineResponse)
@@ -617,6 +702,72 @@ def approve_compliance_report(report_id: UUID, payload: ComplianceApprovalReques
     compliance_reports_by_id[report_id] = updated
     compliance_reports_by_idea[updated.idea_id] = [updated if item.id == report_id else item for item in compliance_reports_by_idea.get(updated.idea_id, [])]
     return ComplianceReportResponse(report=updated)
+
+
+@app.post("/api/v1/ideas/{idea_id}/publishing-package", response_model=PublishingPackage)
+def generate_publishing_package(idea_id: str, payload: PublishingPackageGenerateRequest) -> PublishingPackage:
+    return publishing_service.generate(idea_id, payload.angle_status)
+
+
+@app.get("/api/v1/ideas/{idea_id}/publishing-package", response_model=PublishingPackage)
+def get_publishing_package(idea_id: str) -> PublishingPackage:
+    package = publishing_repo.get_package(idea_id)
+    if package is None:
+        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+    return package
+
+
+@app.patch("/api/v1/ideas/{idea_id}/publishing-package", response_model=PublishingPackage)
+def update_publishing_package(idea_id: str, payload: PublishingPackageUpdateRequest) -> PublishingPackage:
+    existing = publishing_repo.get_package(idea_id)
+    if existing is None:
+        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+    updates = payload.model_dump(exclude_unset=True)
+    updated = existing.model_copy(update=updates)
+    publishing_repo.revise_package(idea_id, updated, "manual-update")
+    return updated
+
+
+@app.post("/api/v1/ideas/{idea_id}/publishing-package/approve", response_model=PublishingPackage)
+def approve_publishing_package(idea_id: str, payload: PublishingPackageApproveRequest) -> PublishingPackage:
+    return publishing_service.approve(idea_id, payload.angle_status)
+
+
+@app.get("/api/v1/ideas/{idea_id}/publishing-package/revisions")
+def list_publishing_package_revisions(idea_id: str) -> dict[str, Any]:
+    package = publishing_repo.get_package(idea_id)
+    if package is None:
+        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+    revisions = publishing_repo.get_revisions(package.id)
+    return {"revisions": [revision.model_dump(mode="json") for revision in revisions]}
+
+
+@app.get("/api/v1/ideas/{idea_id}/publishing-package/export", response_model=PublishingPackageExportResponse)
+def export_publishing_package(idea_id: str, format: str = "json") -> PublishingPackageExportResponse:
+    package = publishing_repo.get_package(idea_id)
+    if package is None:
+        raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+    normalized = format.strip().lower()
+    if normalized == "markdown":
+        markdown = "\n".join(
+            [
+                f"# {package.title}",
+                "",
+                "## Description",
+                package.description,
+                "",
+                "## Tags",
+                ", ".join(package.tags),
+                "",
+                "## Chapters",
+                *[f"- {chapter}" for chapter in package.chapters],
+                "",
+                "## Upload Checklist",
+                *[f"- [ ] {item}" for item in package.upload_checklist],
+            ]
+        )
+        return PublishingPackageExportResponse(format="markdown", content=markdown)
+    return PublishingPackageExportResponse(format="json", content=package.model_dump(mode="json"))
 
 
 @app.post("/api/v1/compliance/{report_id}/override", response_model=ComplianceReportResponse)
