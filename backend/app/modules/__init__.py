@@ -34,6 +34,7 @@ from .script_ai import (
     ScorePayload,
     ScriptAIService,
 )
+from .title_thumbnail_lab import ThumbnailConcept, TitleThumbnailLabRepository, TitleVariant
 from .scripts import (
     HookVariant,
     HookVariantCreate,
@@ -93,5 +94,8 @@ __all__ = [
     "ScriptRepository",
     "ScriptSection",
     "ScriptState",
+    "ThumbnailConcept",
+    "TitleThumbnailLabRepository",
+    "TitleVariant",
     "ScriptVersion",
 ]
