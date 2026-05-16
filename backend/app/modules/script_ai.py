@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .ai_provider import AIProvider, MockProvider
+from .compliance import ComplianceRecommendation, RiskLevel
 from .llm_logging import LLMCall, LLMCallLogger
 from .scripts import HookVariantType, RetentionReview, ScriptQualityReport, ScriptSection
 
@@ -70,7 +72,26 @@ class RetentionAnalysisPayload(BaseModel):
     review: RetentionReview
 
 
+class ComplianceReviewPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reused_content_risk: RiskLevel
+    repetitive_content_risk: RiskLevel
+    mass_production_risk: RiskLevel
+    synthetic_content_disclosure_required: bool
+    copyright_risk: RiskLevel
+    misleading_claims_risk: RiskLevel
+    sensitive_topic_risk: RiskLevel
+    clickbait_risk: RiskLevel
+    overall_risk: RiskLevel
+    recommendation: ComplianceRecommendation
+    required_fixes: list[str]
+    reviewer_notes: str
+
+
 class ScriptAIService:
+    _COMPLIANCE_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "compliance-review.md"
+
     def __init__(self, provider: AIProvider | None = None, logger: LLMCallLogger | None = None) -> None:
         self.provider = provider or MockProvider()
         self.logger = logger or LLMCallLogger()
@@ -141,6 +162,21 @@ class ScriptAIService:
     def analyze_retention(self, *, angle: str, channel_memory: str, sections: list[ScriptSection]) -> RetentionAnalysisPayload:
         prompt = f"""Analyze retention risks in strict JSON only.\nApproved angle: {angle}\nChannel memory: {channel_memory}\nScript sections: {json.dumps([s.model_dump() for s in sections])}\nSchema: {{\"review\": {{\"weak_intro_warning\": bool, \"slow_context_warning\": bool, \"payoff_delay_warning\": bool, \"repeated_sentence_warning\": bool, \"generic_section_warning\": bool, \"unclear_promise_warning\": bool, \"section_map\": [{{\"timestamp_range\": string, \"section_name\": string, \"script_excerpt\": string, \"purpose\": string, \"risk\": string, \"recommendation\": string}}], \"recommendations\": [string], \"timestamps\": [string]}}}}"""
         parsed = self._parse_strict_json(self._call(prompt=prompt, operation="retention_analysis"), RetentionAnalysisPayload)
+        return parsed  # type: ignore[return-value]
+
+    def review_compliance(self, *, angle: str, channel_memory: str, script_text: str) -> ComplianceReviewPayload:
+        prompt_template = self._COMPLIANCE_PROMPT_PATH.read_text(encoding="utf-8").strip()
+        schema_json = json.dumps(ComplianceReviewPayload.model_json_schema(), separators=(",", ":"))
+        prompt = (
+            f"{prompt_template}\n\n"
+            f"Approved angle: {angle}\n"
+            f"Channel memory: {channel_memory}\n"
+            f"Script text: {script_text}\n\n"
+            "Return strict JSON only.\n"
+            f"Schema: {schema_json}\n"
+            "Do not include any legal guarantees or disclaimers."
+        )
+        parsed = self._parse_strict_json(self._call(prompt=prompt, operation="compliance_review"), ComplianceReviewPayload)
         return parsed  # type: ignore[return-value]
 
     # Backwards-compatible wrappers.

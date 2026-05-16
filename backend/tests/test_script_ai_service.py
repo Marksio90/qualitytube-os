@@ -1,6 +1,6 @@
 import pytest
 
-from app.modules.script_ai import OutlinePayload, ScriptAIService
+from app.modules.script_ai import ComplianceReviewPayload, OutlinePayload, ScriptAIService
 
 
 class BadProvider:
@@ -88,3 +88,27 @@ def test_analyze_retention_unexpected_field_rejected() -> None:
     svc = ScriptAIService(provider=provider)
     with pytest.raises(ValueError, match="did not match schema"):
         svc.analyze_retention(angle="a", channel_memory="mem", sections=[])
+
+
+def test_review_compliance_uses_prompt_file_and_strict_schema() -> None:
+    provider = MockProvider(
+        [
+            '{"reused_content_risk":"low","repetitive_content_risk":"medium","mass_production_risk":"low","synthetic_content_disclosure_required":false,"copyright_risk":"low","misleading_claims_risk":"low","sensitive_topic_risk":"low","clickbait_risk":"medium","overall_risk":"low","recommendation":"approve","required_fixes":[],"reviewer_notes":"Looks compliant with minor style risk."}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    result = svc.review_compliance(angle="a", channel_memory="mem", script_text="script body")
+    assert isinstance(result, ComplianceReviewPayload)
+    assert result.recommendation == "approve"
+    assert "Do not include any legal guarantees or disclaimers." in provider.prompts[-1]
+
+
+def test_review_compliance_rejects_extra_fields() -> None:
+    provider = MockProvider(
+        [
+            '{"reused_content_risk":"low","repetitive_content_risk":"medium","mass_production_risk":"low","synthetic_content_disclosure_required":false,"copyright_risk":"low","misleading_claims_risk":"low","sensitive_topic_risk":"low","clickbait_risk":"medium","overall_risk":"low","recommendation":"approve","required_fixes":[],"reviewer_notes":"ok","legal_guarantee":"none"}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="did not match schema"):
+        svc.review_compliance(angle="a", channel_memory="mem", script_text="script body")
