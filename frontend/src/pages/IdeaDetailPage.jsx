@@ -23,6 +23,17 @@ const RISK_FIELDS = [
   "clickbait_risk",
 ];
 
+const emptyPublishingForm = {
+  title: "",
+  description: "",
+  tags: "",
+  chapters: "",
+  pinned_comment: "",
+  thumbnail_brief: "",
+  disclosure_notes: "",
+  checklist: "",
+};
+
 export function IdeaDetailPage() {
   const { ideaId = "" } = useParams();
   const [activeTab, setActiveTab] = useState("compliance");
@@ -30,6 +41,11 @@ export function IdeaDetailPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
+
+  const [publishing, setPublishing] = useState({ loading: true, error: "", success: "", data: null });
+  const [publishingForm, setPublishingForm] = useState(emptyPublishingForm);
+  const [publishingBusy, setPublishingBusy] = useState(false);
+  const [validation, setValidation] = useState({ warnings: [], errors: [], compliance_blockers: [] });
 
   const loadCompliance = async () => {
     setState({ loading: true, error: "", report: null });
@@ -45,8 +61,28 @@ export function IdeaDetailPage() {
     }
   };
 
+  const loadPublishing = async () => {
+    setPublishing({ loading: true, error: "", success: "", data: null });
+    try {
+      const data = await api(`/api/v1/ideas/${ideaId}/publishing`);
+      const pkg = data.package || null;
+      setPublishing({ loading: false, error: "", success: "", data: pkg });
+      if (pkg) {
+        setPublishingForm({ ...emptyPublishingForm, ...pkg });
+        setValidation(pkg.validation || { warnings: [], errors: [], compliance_blockers: [] });
+      }
+    } catch (e) {
+      if (e.message.includes("not found") || e.message.includes("no publishing package")) {
+        setPublishing({ loading: false, error: "", success: "", data: null });
+      } else {
+        setPublishing({ loading: false, error: e.message, success: "", data: null });
+      }
+    }
+  };
+
   useEffect(() => {
     loadCompliance();
+    loadPublishing();
   }, [ideaId]);
 
   const blocked = useMemo(() => {
@@ -54,6 +90,8 @@ export function IdeaDetailPage() {
     if (!report) return true;
     return report.recommendation === "do_not_publish" || report.overall_risk === "high" || (report.required_fixes || []).length > 0;
   }, [state.report]);
+
+  const approvalBlocked = blocked || validation.errors.length > 0 || validation.compliance_blockers.length > 0;
 
   async function runApproval() {
     if (!state.report) return;
@@ -90,11 +128,33 @@ export function IdeaDetailPage() {
     } finally { setActionBusy(false); }
   }
 
+  async function publishingAction(action, message) {
+    setPublishingBusy(true);
+    setPublishing((curr) => ({ ...curr, error: "", success: "" }));
+    try {
+      const data = await action();
+      if (data?.package) {
+        setPublishingForm({ ...emptyPublishingForm, ...data.package });
+      }
+      if (data?.validation) {
+        setValidation(data.validation);
+      }
+      setPublishing((curr) => ({ ...curr, success: message, data: data?.package || curr.data }));
+    } catch (e) {
+      setPublishing((curr) => ({ ...curr, error: e.message }));
+    } finally {
+      setPublishingBusy(false);
+    }
+  }
+
+  const updateField = (key) => (e) => setPublishingForm((curr) => ({ ...curr, [key]: e.target.value }));
+
   return <main style={{ padding: 16 }}>
     <h1>Idea Detail</h1>
     <p>Idea ID: <strong>{ideaId}</strong></p>
     <div style={{ display: "flex", gap: 8 }}>
       <button aria-pressed={activeTab === "compliance"} onClick={() => setActiveTab("compliance")}>Compliance</button>
+      <button aria-pressed={activeTab === "publishing"} onClick={() => setActiveTab("publishing")}>Publishing</button>
     </div>
     {activeTab === "compliance" && <section>
       <h2>Compliance</h2>
@@ -118,6 +178,40 @@ export function IdeaDetailPage() {
           <input id="override-reason" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
           <button disabled={actionBusy} onClick={runOverride}>Override compliance</button>
         </div>
+      </>}
+    </section>}
+
+    {activeTab === "publishing" && <section>
+      <h2>Publishing</h2>
+      {publishing.loading && <p>Loading publishing package…</p>}
+      {publishing.error && <p role="alert">Publishing error: {publishing.error}</p>}
+      {publishing.success && <p>{publishing.success}</p>}
+      {!publishing.loading && !publishing.error && !publishing.data && <>
+        <p>No publishing package available yet.</p>
+        <button disabled={publishingBusy} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing/generate`, { method: "POST" }), "Publishing package generated.")}>Generate package</button>
+      </>}
+      {!publishing.loading && (publishing.data || publishing.success) && <>
+        <label>Title<input value={publishingForm.title} onChange={updateField("title")} /></label>
+        <label>Description<textarea value={publishingForm.description} onChange={updateField("description")} /></label>
+        <label>Tags<input value={publishingForm.tags} onChange={updateField("tags")} /></label>
+        <label>Chapters<textarea value={publishingForm.chapters} onChange={updateField("chapters")} /></label>
+        <label>Pinned comment<textarea value={publishingForm.pinned_comment} onChange={updateField("pinned_comment")} /></label>
+        <label>Thumbnail brief<textarea value={publishingForm.thumbnail_brief} onChange={updateField("thumbnail_brief")} /></label>
+        <label>Disclosure notes<textarea value={publishingForm.disclosure_notes} onChange={updateField("disclosure_notes")} /></label>
+        <label>Checklist<textarea value={publishingForm.checklist} onChange={updateField("checklist")} /></label>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <button disabled={publishingBusy} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing`, { method: "PATCH", body: JSON.stringify(publishingForm) }), "Publishing edits saved.")}>Save edits</button>
+          <button disabled={publishingBusy} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing/validate`, { method: "POST", body: JSON.stringify(publishingForm) }), "Validation completed.")}>Validate</button>
+          <button disabled={publishingBusy || approvalBlocked} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing/approve`, { method: "POST" }), "Publishing package approved.")}>Approve publish package</button>
+          <button disabled={publishingBusy} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing/export?format=markdown`), "Markdown export ready.")}>Export markdown</button>
+          <button disabled={publishingBusy} onClick={() => publishingAction(() => api(`/api/v1/ideas/${ideaId}/publishing/export?format=json`), "JSON export ready.")}>Export JSON</button>
+        </div>
+
+        <h3>Validation</h3>
+        {validation.warnings.length > 0 && <ul>{validation.warnings.map((w) => <li key={w}>⚠️ {w}</li>)}</ul>}
+        {validation.errors.length > 0 && <ul>{validation.errors.map((er) => <li key={er} role="alert">❌ {er}</li>)}</ul>}
+        {validation.compliance_blockers.length > 0 && <ul>{validation.compliance_blockers.map((b) => <li key={b} role="alert">🚫 {b}</li>)}</ul>}
       </>}
     </section>}
   </main>;
