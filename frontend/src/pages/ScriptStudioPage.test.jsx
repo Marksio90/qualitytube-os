@@ -219,3 +219,96 @@ describe("ScriptStudioPage visual plan tab", () => {
     expect(approveButton.disabled).toBe(true);
   });
 });
+
+describe("ScriptStudioPage audio tab", () => {
+  it("handles generate, edit, save, approve and export success", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    mockFetchSequence([
+      { body: { scripts: [{ id: "s1", state: "draft", sections: [{ title: "hook", content: "This hook is long enough for validation and rendering." }, { title: "body", content: "Body section provides evidence and sequencing for the argument." }, { title: "cta", content: "Ask audience to share one experiment in comments today." }] }] } },
+      { body: { versions: [] } },
+      { body: { audio_brief: { voice_style: "warm", pace: "medium", emotional_tone: "hopeful", pronunciation_notes: "Say Kubernetes correctly", pause_notes: "Pause after hook", emphasis_notes: "Stress key metric", synthetic_voice_used: true, disclosure_required: true, disclosure_warning: "AI voice disclosure required" } } },
+      { body: { audio_brief: { voice_style: "energetic", pace: "medium", emotional_tone: "hopeful", pronunciation_notes: "Say Kubernetes correctly", pause_notes: "Pause after hook", emphasis_notes: "Stress key metric", synthetic_voice_used: true, disclosure_required: true, disclosure_warning: "AI voice disclosure required" } } },
+      { body: { ok: true } },
+    ]);
+
+    await act(async () => { root.render(<ScriptStudioPage />); });
+    await act(async () => { await flush(); await flush(); });
+    await act(async () => { Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Audio").click(); });
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Generate brief").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio brief generated.");
+    expect(container.textContent).toContain("Disclosure warning");
+
+    const voiceInput = Array.from(container.querySelectorAll("input")).find((i) => i.value === "warm");
+    await act(async () => {
+      voiceInput.value = "energetic";
+      voiceInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await flush();
+    });
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Save patch").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio patch saved.");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Approve brief").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio brief approved.");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Export text").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio text exported.");
+    expect(container.textContent).toContain("Voice style: energetic");
+    expect(container.textContent).toContain("Disclosure warning: AI voice disclosure required");
+  });
+
+  it("shows audio action errors and hides disclosure when not required", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    mockFetchSequence([
+      { body: { scripts: [{ id: "s1", state: "draft", sections: [{ title: "hook", content: "This hook is long enough for validation and rendering." }, { title: "body", content: "Body section provides evidence and sequencing for the argument." }, { title: "cta", content: "Ask audience to share one experiment in comments today." }] }] } },
+      { body: { versions: [] } },
+      { ok: false, body: { message: "Audio generation unavailable" } },
+      { body: { audio_brief: { voice_style: "clear", pace: "fast", emotional_tone: "neutral", pronunciation_notes: "", pause_notes: "", emphasis_notes: "", synthetic_voice_used: true, disclosure_required: false, disclosure_warning: "Should not show" } } },
+      { ok: false, body: { message: "Save failed" } },
+      { ok: false, body: { message: "Approve failed" } },
+    ]);
+
+    await act(async () => { root.render(<ScriptStudioPage />); });
+    await act(async () => { await flush(); await flush(); });
+    await act(async () => { Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Audio").click(); });
+    expect(container.textContent).toContain("No audio brief yet.");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Generate brief").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio generate failed: Audio generation unavailable");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Generate brief").click();
+      await flush();
+    });
+    expect(container.textContent).not.toContain("Disclosure warning");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Save patch").click();
+      await flush();
+    });
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Approve brief").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Audio save failed: Save failed");
+    expect(container.textContent).toContain("Audio approve failed: Approve failed");
+  });
+});

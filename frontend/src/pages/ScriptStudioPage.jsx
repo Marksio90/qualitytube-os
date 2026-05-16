@@ -27,6 +27,14 @@ export function ScriptStudioPage() {
   const [activeTab, setActiveTab] = useState("editor");
   const [hooksData, setHooksData] = useState({ loading: false, error: "", items: [], selectedId: "" });
   const [retentionData, setRetentionData] = useState({ loading: false, error: "", analysis: null });
+  const [audioBrief, setAudioBrief] = useState(null);
+  const [audioDraft, setAudioDraft] = useState(null);
+  const [audioActionStatus, setAudioActionStatus] = useState({
+    generate: { loading: false, error: "", success: "" },
+    save: { loading: false, error: "", success: "" },
+    approve: { loading: false, error: "", success: "" },
+    export: { loading: false, error: "", success: "", text: "" },
+  });
 
   const warnings = useMemo(() => {
     if (!script) return [];
@@ -143,6 +151,65 @@ export function ScriptStudioPage() {
     }
   }
 
+  function setAudioStatus(action, next) {
+    setAudioActionStatus((prev) => ({ ...prev, [action]: { ...prev[action], ...next } }));
+  }
+
+  async function generateAudioBrief() {
+    setAudioStatus("generate", { loading: true, error: "", success: "" });
+    try {
+      const data = await api(`/api/v1/scripts/${script.id}/audio/generate-brief`, { method: "POST", body: JSON.stringify({}) });
+      setAudioBrief(data.audio_brief || null);
+      setAudioDraft(data.audio_brief || null);
+      setAudioStatus("generate", { loading: false, error: "", success: "Audio brief generated." });
+    } catch (e) {
+      setAudioStatus("generate", { loading: false, error: e.message, success: "" });
+    }
+  }
+
+  async function saveAudioPatch() {
+    if (!audioDraft) return;
+    setAudioStatus("save", { loading: true, error: "", success: "" });
+    try {
+      const data = await api(`/api/v1/scripts/${script.id}/audio/patch`, { method: "POST", body: JSON.stringify({ audio_brief: audioDraft }) });
+      const nextBrief = data.audio_brief || audioDraft;
+      setAudioBrief(nextBrief);
+      setAudioDraft(nextBrief);
+      setAudioStatus("save", { loading: false, error: "", success: "Audio patch saved." });
+    } catch (e) {
+      setAudioStatus("save", { loading: false, error: e.message, success: "" });
+    }
+  }
+
+  async function approveAudioBrief() {
+    setAudioStatus("approve", { loading: true, error: "", success: "" });
+    try {
+      await api(`/api/v1/scripts/${script.id}/audio/approve`, { method: "POST", body: JSON.stringify({}) });
+      setAudioStatus("approve", { loading: false, error: "", success: "Audio brief approved." });
+    } catch (e) {
+      setAudioStatus("approve", { loading: false, error: e.message, success: "" });
+    }
+  }
+
+  function exportAudioText() {
+    setAudioStatus("export", { loading: true, error: "", success: "", text: "" });
+    if (!audioDraft) {
+      setAudioStatus("export", { loading: false, error: "No audio brief to export.", success: "", text: "" });
+      return;
+    }
+    const disclosureVisible = Boolean(audioDraft.synthetic_voice_used && audioDraft.disclosure_required);
+    const lines = [
+      `Voice style: ${audioDraft.voice_style || ""}`,
+      `Pace: ${audioDraft.pace || ""}`,
+      `Emotional tone: ${audioDraft.emotional_tone || ""}`,
+      `Pronunciation notes: ${audioDraft.pronunciation_notes || ""}`,
+      `Pause notes: ${audioDraft.pause_notes || ""}`,
+      `Emphasis notes: ${audioDraft.emphasis_notes || ""}`,
+    ];
+    if (disclosureVisible) lines.push(`Disclosure warning: ${audioDraft.disclosure_warning || ""}`);
+    setAudioStatus("export", { loading: false, error: "", success: "Audio text exported.", text: lines.join("\n") });
+  }
+
   if (loading) return <main><h1>Script Studio</h1><p>Loading script workspace…</p></main>;
   if (error) return <main><h1>Script Studio</h1><p role="alert">Failed to load: {error}</p></main>;
   if (!script) return <main><h1>Script Studio</h1><p>No script available yet.</p></main>;
@@ -158,6 +225,7 @@ export function ScriptStudioPage() {
         <button onClick={() => setActiveTab("editor")} aria-pressed={activeTab === "editor"}>Editor</button>
         <button onClick={() => setActiveTab("hooks")} aria-pressed={activeTab === "hooks"}>Hook & Retention</button>
         <button onClick={() => setActiveTab("visual-plan")} aria-pressed={activeTab === "visual-plan"}>Visual Plan</button>
+        <button onClick={() => setActiveTab("audio")} aria-pressed={activeTab === "audio"}>Audio</button>
       </div>
       {activeTab === "editor" && <section style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 16 }}>
         <aside>
@@ -250,6 +318,44 @@ export function ScriptStudioPage() {
 
       {activeTab === "visual-plan" && (
         <VisualPlanTab scriptId={script.id} api={api} disabled={saving} />
+      )}
+
+      {activeTab === "audio" && (
+        <section>
+          <h2>Audio Brief</h2>
+          <button disabled={audioActionStatus.generate.loading} onClick={generateAudioBrief}>{audioActionStatus.generate.loading ? "Generating brief…" : "Generate brief"}</button>
+          {!audioActionStatus.generate.loading && !audioActionStatus.generate.error && !audioBrief && <p>No audio brief yet.</p>}
+          {audioActionStatus.generate.error && <p role="alert">Audio generate failed: {audioActionStatus.generate.error}</p>}
+          {audioActionStatus.generate.success && <p>{audioActionStatus.generate.success}</p>}
+
+          {audioDraft && (
+            <>
+              <label>Voice style <input value={audioDraft.voice_style || ""} onChange={(e) => setAudioDraft({ ...audioDraft, voice_style: e.target.value })} /></label>
+              <label>Pace <input value={audioDraft.pace || ""} onChange={(e) => setAudioDraft({ ...audioDraft, pace: e.target.value })} /></label>
+              <label>Emotional tone <input value={audioDraft.emotional_tone || ""} onChange={(e) => setAudioDraft({ ...audioDraft, emotional_tone: e.target.value })} /></label>
+              <label>Pronunciation notes <textarea value={audioDraft.pronunciation_notes || ""} onChange={(e) => setAudioDraft({ ...audioDraft, pronunciation_notes: e.target.value })} /></label>
+              <label>Pause notes <textarea value={audioDraft.pause_notes || ""} onChange={(e) => setAudioDraft({ ...audioDraft, pause_notes: e.target.value })} /></label>
+              <label>Emphasis notes <textarea value={audioDraft.emphasis_notes || ""} onChange={(e) => setAudioDraft({ ...audioDraft, emphasis_notes: e.target.value })} /></label>
+              {audioDraft.synthetic_voice_used && audioDraft.disclosure_required && (
+                <label>Disclosure warning <textarea value={audioDraft.disclosure_warning || ""} onChange={(e) => setAudioDraft({ ...audioDraft, disclosure_warning: e.target.value })} /></label>
+              )}
+
+              <div>
+                <button disabled={audioActionStatus.save.loading} onClick={saveAudioPatch}>{audioActionStatus.save.loading ? "Saving patch…" : "Save patch"}</button>
+                <button disabled={audioActionStatus.approve.loading} onClick={approveAudioBrief}>{audioActionStatus.approve.loading ? "Approving brief…" : "Approve brief"}</button>
+                <button disabled={audioActionStatus.export.loading} onClick={exportAudioText}>{audioActionStatus.export.loading ? "Exporting text…" : "Export text"}</button>
+              </div>
+            </>
+          )}
+
+          {audioActionStatus.save.error && <p role="alert">Audio save failed: {audioActionStatus.save.error}</p>}
+          {audioActionStatus.approve.error && <p role="alert">Audio approve failed: {audioActionStatus.approve.error}</p>}
+          {audioActionStatus.export.error && <p role="alert">Audio export failed: {audioActionStatus.export.error}</p>}
+          {audioActionStatus.save.success && <p>{audioActionStatus.save.success}</p>}
+          {audioActionStatus.approve.success && <p>{audioActionStatus.approve.success}</p>}
+          {audioActionStatus.export.success && <p>{audioActionStatus.export.success}</p>}
+          {audioActionStatus.export.text && <pre>{audioActionStatus.export.text}</pre>}
+        </section>
       )}
     </main>
   );
