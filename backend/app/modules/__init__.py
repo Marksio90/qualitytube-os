@@ -35,6 +35,14 @@ from .script_ai import (
     ScriptAIService,
 )
 from .title_thumbnail_lab import ThumbnailConcept, TitleThumbnailLabRepository, TitleVariant
+from .title_thumbnail_ai import (
+    GenerateThumbnailBriefsPayload,
+    GenerateTitlesPayload,
+    ScoreTitlePayload,
+    ThumbnailBrief,
+    TitleCandidate,
+    TitleThumbnailAIService,
+)
 from .scripts import (
     HookVariant,
     HookVariantCreate,
@@ -97,5 +105,11 @@ __all__ = [
     "ThumbnailConcept",
     "TitleThumbnailLabRepository",
     "TitleVariant",
+    "GenerateThumbnailBriefsPayload",
+    "GenerateTitlesPayload",
+    "ScoreTitlePayload",
+    "ThumbnailBrief",
+    "TitleCandidate",
+    "TitleThumbnailAIService",
     "ScriptVersion",
 ]
