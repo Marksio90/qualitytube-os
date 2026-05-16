@@ -8,7 +8,7 @@ from .compliance import (
     ReviewerSource,
     RiskLevel,
 )
-from .compliance_checks import ComplianceCheckInput, ComplianceCheckResult, publishing_blocked, run_compliance_checks
+from .compliance_checks import ComplianceCheckInput, ComplianceCheckResult, compliance_gate_failures, publishing_blocked, run_compliance_checks
 from .ideas import Idea
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
@@ -42,6 +42,7 @@ __all__ = [
     "ChannelMemoryRepository",
     "ComplianceRecommendation",
     "ComplianceReport",
+    "compliance_gate_failures",
     "publishing_blocked",
     "run_compliance_checks",
     "DraftPayload",

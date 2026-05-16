@@ -12,6 +12,7 @@ MIN_SECTION_LENGTH = 20
 class ScriptState(StrEnum):
     draft = "draft"
     approved = "approved"
+    ready_to_publish = "ready_to_publish"
 
 
 class ScriptSection(BaseModel):
