@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, publishing_blocked, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -204,16 +204,16 @@ def _risk_from_bool(flag: bool) -> RiskLevel:
 
 def _run_deterministic_compliance_checks(idea_id: str) -> dict[str, Any]:
     script = repo.get_script(idea_id)
-    joined = " ".join(section.content.lower() for section in script.sections) if script else ""
-    checks = {
-        "missing_script": script is None,
-        "contains_guarantee_claim": "guaranteed" in joined,
-        "contains_copyright_terms": any(word in joined for word in ["copyright", "stolen", "pirated"]),
-        "contains_sensitive_terms": any(word in joined for word in ["violence", "self-harm", "medical", "financial advice"]),
-        "clickbait_pattern": any(term in joined for term in ["you won't believe", "shocking", "secret trick"]),
-        "low_human_contribution_signal": len(joined) < 150,
-    }
-    return checks
+    joined = " ".join(section.content for section in script.sections) if script else ""
+    result = run_compliance_checks(
+        ComplianceCheckInput(
+            script_present=script is not None,
+            script_text=joined,
+            synthetic_disclosure_present="synthetic disclosure" in joined.lower(),
+            human_contribution_evidence_present="edited by" in joined.lower() or "human review" in joined.lower(),
+        )
+    )
+    return result.as_dict()
 
 
 def _ai_assisted_compliance_review(*, idea_id: str, deterministic: dict[str, Any], channel_id: str) -> dict[str, Any]:
@@ -549,19 +549,19 @@ def review_compliance(idea_id: str, payload: ComplianceReviewRequest) -> Complia
     ai_result = _ai_assisted_compliance_review(idea_id=idea_id, deterministic=deterministic, channel_id=payload.channel_id)
     report = ComplianceReport(
         idea_id=idea_id,
-        reused_content_risk=_risk_from_bool(deterministic["missing_script"]),
-        repetitive_content_risk=_risk_from_bool(deterministic["low_human_contribution_signal"]),
-        mass_production_risk=_risk_from_bool(deterministic["low_human_contribution_signal"]),
-        synthetic_content_disclosure_required=deterministic["low_human_contribution_signal"],
-        copyright_risk=_risk_from_bool(deterministic["contains_copyright_terms"]),
-        misleading_claims_risk=_risk_from_bool(deterministic["contains_guarantee_claim"]),
-        sensitive_topic_risk=_risk_from_bool(deterministic["contains_sensitive_terms"]),
-        clickbait_risk=_risk_from_bool(deterministic["clickbait_pattern"]),
+        reused_content_risk=_risk_from_bool(bool(deterministic["reused_content_signals"])),
+        repetitive_content_risk=_risk_from_bool(bool(deterministic["repetitive_structure_signals"])),
+        mass_production_risk=_risk_from_bool(bool(deterministic["mass_production_indicators"])),
+        synthetic_content_disclosure_required=bool(deterministic["synthetic_disclosure_required"]),
+        copyright_risk=RiskLevel.low,
+        misleading_claims_risk=_risk_from_bool(bool(deterministic["clickbait_or_misleading_claim_signals"])),
+        sensitive_topic_risk=_risk_from_bool(bool(deterministic["sensitive_topic_flags"])),
+        clickbait_risk=_risk_from_bool(bool(deterministic["clickbait_or_misleading_claim_signals"])),
         originality_evidence=ai_result.get("originality_evidence", ["Deterministic+AI review completed"]),
         human_contribution_evidence=ai_result.get("human_contribution_evidence", ["Human editorial checkpoints recorded"]),
-        overall_risk=RiskLevel.high if any(deterministic.values()) else RiskLevel.low,
-        recommendation=ComplianceRecommendation.high_risk if any(deterministic.values()) else ComplianceRecommendation.approve,
-        required_fixes=ai_result.get("required_fixes", ["Address flagged deterministic risks"] if any(deterministic.values()) else []),
+        overall_risk=RiskLevel.high if any(bool(value) for value in deterministic.values()) else RiskLevel.low,
+        recommendation=ComplianceRecommendation.high_risk if any(bool(value) for value in deterministic.values()) else ComplianceRecommendation.approve,
+        required_fixes=ai_result.get("required_fixes", ["Address flagged deterministic risks"] if any(bool(value) for value in deterministic.values()) else []),
         reviewer_notes=ai_result.get("reviewer_notes", "Deterministic checks executed before AI-assisted pass."),
         reviewer_source=ReviewerSource.ai_assisted,
     )
@@ -591,7 +591,7 @@ def approve_compliance_report(report_id: UUID, payload: ComplianceApprovalReques
     report = compliance_reports_by_id.get(report_id)
     if report is None:
         raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "compliance report not found", {"report_id": str(report_id)})
-    has_blockers = report.overall_risk == RiskLevel.high or report.recommendation in {ComplianceRecommendation.high_risk, ComplianceRecommendation.do_not_publish} or bool(report.required_fixes)
+    has_blockers = publishing_blocked(report=report, required_fixes_resolved=False)
     if has_blockers:
         raise _api_error(409, "COMPLIANCE_BLOCKED", "blocking compliance conditions must be resolved before approval", {"report_id": str(report_id)})
     updated = report.model_copy(update={"approval_state": ApprovalState.approved, "updated_at": datetime.now(UTC), "reviewer_notes": f"{report.reviewer_notes} Approved by {payload.approver}.".strip()})

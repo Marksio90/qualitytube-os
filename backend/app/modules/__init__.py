@@ -8,6 +8,7 @@ from .compliance import (
     ReviewerSource,
     RiskLevel,
 )
+from .compliance_checks import ComplianceCheckInput, ComplianceCheckResult, publishing_blocked, run_compliance_checks
 from .ideas import Idea
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
@@ -41,7 +42,11 @@ __all__ = [
     "ChannelMemoryRepository",
     "ComplianceRecommendation",
     "ComplianceReport",
+    "publishing_blocked",
+    "run_compliance_checks",
     "DraftPayload",
+    "ComplianceCheckInput",
+    "ComplianceCheckResult",
     "ApprovalState",
     "HookScorePayload",
     "HookVariant",
