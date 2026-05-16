@@ -11,6 +11,7 @@ from .ai_provider import AIProvider, MockProvider
 from .compliance import ComplianceRecommendation, ComplianceReport, RiskLevel
 from .llm_logging import LLMCall, LLMCallLogger
 from .scripts import HookVariantType, RetentionReview, ScriptQualityReport, ScriptSection
+from .visual_plan import VisualType
 
 
 class OutlinePayload(BaseModel):
@@ -104,9 +105,29 @@ class PublishingPackagePayload(BaseModel):
     promise_alignment_notes: list[str]
 
 
+class VisualScenePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_number: int
+    narration_excerpt: str
+    visual_type: VisualType
+    visual_description: str
+    purpose: str
+    asset_notes: str | None = None
+    risk_notes: str | None = None
+    filler_risk_score: float
+
+
+class VisualPlanPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenes: list[VisualScenePayload]
+
+
 class ScriptAIService:
     _COMPLIANCE_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "compliance-review.md"
     _PUBLISHING_PACKAGE_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "publishing-package-generation.md"
+    _VISUAL_PLAN_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "visual-plan-generation.md"
 
     def __init__(self, provider: AIProvider | None = None, logger: LLMCallLogger | None = None) -> None:
         self.provider = provider or MockProvider()
@@ -241,6 +262,48 @@ class ScriptAIService:
             promise_alignment_notes=parsed.promise_alignment_notes,
             approved_script_sections=approved_script_sections,
         )
+        return parsed  # type: ignore[return-value]
+
+    def _validate_visual_plan(self, *, scenes: list[VisualScenePayload]) -> None:
+        if not scenes:
+            raise ValueError("generated visual plan scenes must not be empty")
+
+        previous_scene_number: int | None = None
+        for scene in scenes:
+            if previous_scene_number is not None and scene.scene_number <= previous_scene_number:
+                raise ValueError("generated visual plan scenes must be strictly ordered by scene_number")
+            previous_scene_number = scene.scene_number
+
+            if not scene.purpose.strip():
+                raise ValueError("generated visual plan scene purpose must not be blank")
+            if scene.visual_type not in set(VisualType):
+                raise ValueError("generated visual plan scene has invalid visual_type")
+            if not 0.0 <= scene.filler_risk_score <= 1.0:
+                raise ValueError("generated visual plan scene filler_risk_score must be between 0 and 1")
+
+    def generate_visual_plan(
+        self,
+        *,
+        approved_script_sections: list[ScriptSection],
+        approved_angle: str,
+        channel_memory: str,
+    ) -> VisualPlanPayload:
+        sections_json = json.dumps([section.model_dump() for section in approved_script_sections])
+        schema_json = json.dumps(VisualPlanPayload.model_json_schema(), separators=(",", ":"))
+        prompt_template = self._VISUAL_PLAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
+        prompt = (
+            f"{prompt_template}\n\n"
+            f"Approved angle: {approved_angle}\n"
+            f"Channel memory: {channel_memory}\n"
+            f"Approved script sections: {sections_json}\n\n"
+            "Return strict JSON only.\n"
+            f"Schema: {schema_json}"
+        )
+        parsed = self._parse_strict_json(
+            self._call(prompt=prompt, operation="visual_plan_generation"),
+            VisualPlanPayload,
+        )
+        self._validate_visual_plan(scenes=parsed.scenes)
         return parsed  # type: ignore[return-value]
 
     # Backwards-compatible wrappers.
