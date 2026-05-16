@@ -43,6 +43,7 @@ from .title_thumbnail_ai import (
     TitleCandidate,
     TitleThumbnailAIService,
 )
+from .visual_plan import VisualPlan, VisualPlanApprovalState, VisualPlanRepository, VisualScene, VisualType
 from .scripts import (
     HookVariant,
     HookVariantCreate,
@@ -111,5 +112,10 @@ __all__ = [
     "ThumbnailBrief",
     "TitleCandidate",
     "TitleThumbnailAIService",
+    "VisualPlan",
+    "VisualPlanApprovalState",
+    "VisualPlanRepository",
+    "VisualScene",
+    "VisualType",
     "ScriptVersion",
 ]
