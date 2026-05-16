@@ -106,6 +106,7 @@ class PublishingPackagePayload(BaseModel):
 
 class ScriptAIService:
     _COMPLIANCE_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "compliance-review.md"
+    _PUBLISHING_PACKAGE_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "publishing-package-generation.md"
 
     def __init__(self, provider: AIProvider | None = None, logger: LLMCallLogger | None = None) -> None:
         self.provider = provider or MockProvider()
@@ -219,17 +220,15 @@ class ScriptAIService:
         sections_json = json.dumps([section.model_dump() for section in approved_script_sections])
         compliance_json = compliance_report.model_dump_json()
         schema_json = json.dumps(PublishingPackagePayload.model_json_schema(), separators=(",", ":"))
+        prompt_template = self._PUBLISHING_PACKAGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
         prompt = (
-            "Generate a YouTube publishing package in strict JSON only.\n"
+            f"{prompt_template}\n\n"
             f"Approved angle: {approved_angle}\n"
             f"Approved script sections: {sections_json}\n"
             f"Compliance report: {compliance_json}\n\n"
-            "Content constraints:\n"
-            "- Keep title promise fully aligned with the script hook/body payoff; no exaggerated claims.\n"
+            "Additional constraints:\n"
             "- Include promise_alignment_notes listing concrete title-to-script consistency checks.\n"
-            "- Chapters must use 'mm:ss - title' or 'hh:mm:ss - title' format.\n"
-            "- Respect compliance findings, especially required_fixes and synthetic disclosure requirements.\n"
-            "- If synthetic_content_disclosure_required is true, include disclosure_notes.\n\n"
+            "- Chapters must use 'mm:ss - title' or 'hh:mm:ss - title' format.\n\n"
             "Return strict JSON only.\n"
             f"Schema: {schema_json}"
         )
