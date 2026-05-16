@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .ai_provider import AIProvider, MockProvider
+from .llm_logging import LLMCall, LLMCallLogger
 
 
 class TitleCandidate(BaseModel):
@@ -70,8 +73,9 @@ class GenerateThumbnailBriefsPayload(BaseModel):
 
 
 class TitleThumbnailAIService:
-    def __init__(self, provider: AIProvider | None = None) -> None:
+    def __init__(self, provider: AIProvider | None = None, logger: LLMCallLogger | None = None) -> None:
         self.provider = provider or MockProvider()
+        self.logger = logger or LLMCallLogger()
 
     @staticmethod
     def _parse_strict_json(raw: str, schema: type[BaseModel]) -> BaseModel:
@@ -104,7 +108,26 @@ class TitleThumbnailAIService:
             "- Include explicit clickbait_risk from 0 to 10.\n"
             "Schema: {\"variants\":[{\"title\":string,\"promise_alignment_notes\":[string],\"no_false_guarantees\":bool,\"clickbait_risk\":float 0-10}]}"
         )
-        parsed = self._parse_strict_json(self.provider.generate(prompt), GenerateTitlesPayload)
+        correlation_id = str(uuid4())
+        started = time.perf_counter()
+        raw = self.provider.generate(prompt)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        self.logger.log(
+            LLMCall(
+                provider=type(self.provider).__name__,
+                model=getattr(self.provider, "model", "mock-model"),
+                operation="title_generation",
+                prompt=prompt,
+                response=raw,
+                prompt_chars=len(prompt),
+                response_chars=len(raw),
+                prompt_tokens=max(1, len(prompt) // 4),
+                completion_tokens=max(1, len(raw) // 4),
+                latency_ms=latency_ms,
+                correlation_id=correlation_id,
+            )
+        )
+        parsed = self._parse_strict_json(raw, GenerateTitlesPayload)
         return parsed  # type: ignore[return-value]
 
     def score_title(self, title_variant: str, idea_context: str) -> ScoreTitlePayload:
@@ -118,7 +141,26 @@ class TitleThumbnailAIService:
             "- Include explicit clickbait_risk from 0 to 10.\n"
             "Schema: {\"clickbait_risk\":float 0-10,\"promise_alignment_score\":float 0-10,\"no_false_guarantees\":bool,\"verdict\":string,\"rationale\":string}"
         )
-        parsed = self._parse_strict_json(self.provider.generate(prompt), ScoreTitlePayload)
+        correlation_id = str(uuid4())
+        started = time.perf_counter()
+        raw = self.provider.generate(prompt)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        self.logger.log(
+            LLMCall(
+                provider=type(self.provider).__name__,
+                model=getattr(self.provider, "model", "mock-model"),
+                operation="title_scoring",
+                prompt=prompt,
+                response=raw,
+                prompt_chars=len(prompt),
+                response_chars=len(raw),
+                prompt_tokens=max(1, len(prompt) // 4),
+                completion_tokens=max(1, len(raw) // 4),
+                latency_ms=latency_ms,
+                correlation_id=correlation_id,
+            )
+        )
+        parsed = self._parse_strict_json(raw, ScoreTitlePayload)
         return parsed  # type: ignore[return-value]
 
     def generate_thumbnail_briefs(
@@ -142,5 +184,24 @@ class TitleThumbnailAIService:
             "- Include explicit clickbait_risk from 0 to 10 for each brief.\n"
             "Schema: {\"briefs\":[{\"title\":string,\"concept\":string,\"composition\":string,\"text_overlay\":string,\"promise_alignment_notes\":[string],\"clickbait_risk\":float 0-10,\"no_false_guarantees\":bool}]}"
         )
-        parsed = self._parse_strict_json(self.provider.generate(prompt), GenerateThumbnailBriefsPayload)
+        correlation_id = str(uuid4())
+        started = time.perf_counter()
+        raw = self.provider.generate(prompt)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        self.logger.log(
+            LLMCall(
+                provider=type(self.provider).__name__,
+                model=getattr(self.provider, "model", "mock-model"),
+                operation="thumbnail_brief_generation",
+                prompt=prompt,
+                response=raw,
+                prompt_chars=len(prompt),
+                response_chars=len(raw),
+                prompt_tokens=max(1, len(prompt) // 4),
+                completion_tokens=max(1, len(raw) // 4),
+                latency_ms=latency_ms,
+                correlation_id=correlation_id,
+            )
+        )
+        parsed = self._parse_strict_json(raw, GenerateThumbnailBriefsPayload)
         return parsed  # type: ignore[return-value]

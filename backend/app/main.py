@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailLabRepository, TitleVariant, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailAIService, TitleThumbnailLabRepository, TitleVariant, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -214,6 +214,7 @@ compliance_reports_by_idea: dict[str, list[ComplianceReport]] = {}
 compliance_reports_by_id: dict[UUID, ComplianceReport] = {}
 publishing_repo = PublishingPackageRepository()
 title_thumbnail_repo = TitleThumbnailLabRepository()
+title_thumbnail_ai = TitleThumbnailAIService()
 
 
 # Seed sample memory for local/dev flows.
@@ -731,31 +732,26 @@ def generate_titles(idea_id: str, payload: GenerateIdeaTitlesRequest) -> Generat
         GenerateScriptRequest(angle_id="approved-angle", angle_status=payload.angle_status, channel_id="default", allow_draft_without_approval=False)
     )
     script = _approved_script_or_409(idea_id)
-    body_text = " ".join(section.content for section in script.sections)
-    base = body_text[:70] if body_text else "High-impact creator system"
+    channel_memory = _resolve_channel_memory_or_424("default")
+    generated_payload = title_thumbnail_ai.generate_titles(
+        idea=idea_id,
+        approved_angle=script.angle_id,
+        approved_script=_build_script_context(script),
+        channel_memory=_build_channel_memory_context(channel_memory),
+    )
     generated = [
         TitleVariant(
             idea_id=idea_id,
-            title_text=f"{base} — Practical breakdown",
-            clarity_score=8.2,
-            curiosity_score=7.9,
-            truthfulness_score=8.6,
-            promise_match_score=8.1,
-            clickbait_risk=2.1,
-            overall_title_score=8.2,
-            rationale="Aligned with script promise and concrete takeaway.",
-        ),
-        TitleVariant(
-            idea_id=idea_id,
-            title_text=f"What most creators miss about {base[:40]}",
-            clarity_score=7.7,
-            curiosity_score=8.5,
-            truthfulness_score=8.1,
-            promise_match_score=7.8,
-            clickbait_risk=2.8,
+            title_text=item.title,
+            clarity_score=8.0,
+            curiosity_score=8.0,
+            truthfulness_score=8.5 if item.no_false_guarantees else 6.0,
+            promise_match_score=8.0,
+            clickbait_risk=item.clickbait_risk,
             overall_title_score=8.0,
-            rationale="Raises a strong gap while staying truthful.",
-        ),
+            rationale="; ".join(item.promise_alignment_notes),
+        )
+        for item in generated_payload.variants
     ]
     created = [title_thumbnail_repo.create_title_variant(item) for item in generated]
     return GenerateIdeaTitlesResponse(idea_id=idea_id, titles=created)
@@ -766,8 +762,12 @@ def score_title(title_id: UUID, payload: ScoreTitleRequest) -> ScoreTitleRespons
     for idea_titles in (title_thumbnail_repo.list_title_variants(idea_id) for idea_id in {s.idea_id for s in script_by_id.values()}):
         for title in idea_titles:
             if title.id == title_id:
+                ai_score = title_thumbnail_ai.score_title(
+                    title_variant=title.title_text,
+                    idea_context=payload.rationale or title.idea_id,
+                )
                 overall = (payload.clarity_score + payload.curiosity_score + payload.truthfulness_score + payload.promise_match_score + (10 - payload.clickbait_risk)) / 5
-                updated = title.model_copy(update={**payload.model_dump(), "overall_title_score": round(overall, 2)})
+                updated = title.model_copy(update={**payload.model_dump(), "overall_title_score": round(overall, 2), "warnings": ai_score.verdict, "rationale": ai_score.rationale})
                 title_thumbnail_repo.update_title_variant(updated)
                 return ScoreTitleResponse(title=updated)
     raise _api_error(404, "TITLE_NOT_FOUND", "title not found", {"title_id": str(title_id)})
@@ -794,30 +794,26 @@ def generate_thumbnail_briefs(idea_id: str, payload: GenerateThumbnailBriefsRequ
     _ensure_angle_gate(
         GenerateScriptRequest(angle_id="approved-angle", angle_status=payload.angle_status, channel_id="default", allow_draft_without_approval=False)
     )
-    _approved_script_or_409(idea_id)
+    script = _approved_script_or_409(idea_id)
+    channel_memory = _resolve_channel_memory_or_424("default")
+    generated_payload = title_thumbnail_ai.generate_thumbnail_briefs(
+        idea_context=_build_script_context(script),
+        selected_or_top_titles=payload.titles,
+        channel_memory=_build_channel_memory_context(channel_memory),
+    )
     concepts = [
         ThumbnailConcept(
             idea_id=idea_id,
-            main_object="Creator dashboard with steep growth line",
-            emotion="Urgency with confidence",
-            composition="Subject on right third, graph spike on left, bold contrast lighting",
-            text_overlay="STOP Guessing",
-            visual_contrast="Neon green graph against dark blue background",
-            mobile_readability_notes="Keep overlay to two short words, 12% top margin",
-            avoid="No tiny text, no cluttered analytics tables",
-            score=8.4,
-        ),
-        ThumbnailConcept(
-            idea_id=idea_id,
-            main_object="Before/after channel performance split",
-            emotion="Surprise",
-            composition="Vertical split with dramatic expression and metrics badge",
-            text_overlay="Before / After",
-            visual_contrast="Warm red left side, cool teal right side",
-            mobile_readability_notes="Large face crop with high edge contrast",
-            avoid="No more than one badge and one arrow",
-            score=8.1,
-        ),
+            main_object=item.concept,
+            emotion="Confidence",
+            composition=item.composition,
+            text_overlay=item.text_overlay,
+            visual_contrast="High contrast subject separation",
+            mobile_readability_notes="Keep overlay concise and high legibility",
+            avoid="Avoid misleading claims or crowded overlays",
+            score=round(10 - item.clickbait_risk, 2),
+        )
+        for item in generated_payload.briefs
     ]
     created = [title_thumbnail_repo.create_thumbnail_concept(item) for item in concepts]
     return GenerateThumbnailBriefsResponse(idea_id=idea_id, thumbnails=created)

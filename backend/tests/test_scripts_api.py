@@ -118,6 +118,49 @@ def test_script_studio_negative_cases() -> None:
     assert missing_revision.json()["detail"]["code"] == "REVISION_NOT_FOUND"
 
 
+
+
+def test_title_thumbnail_endpoints_log_llm_calls() -> None:
+    from app.main import script_ai, title_thumbnail_ai
+
+    baseline = len(title_thumbnail_ai.logger.calls)
+    _gen_draft("idea-title-thumb")
+
+    generated = client.post(
+        "/api/v1/ideas/idea-title-thumb/titles/generate",
+        json={"angle_status": "approved"},
+    )
+    assert generated.status_code == 200
+    assert len(title_thumbnail_ai.logger.calls) >= baseline + 1
+
+    title_id = generated.json()["titles"][0]["id"]
+    scored = client.post(
+        f"/api/v1/titles/{title_id}/score",
+        json={
+            "clarity_score": 8.3,
+            "curiosity_score": 8.2,
+            "truthfulness_score": 8.8,
+            "promise_match_score": 8.4,
+            "clickbait_risk": 2.4,
+            "rationale": "aligned with script and realistic promise",
+        },
+    )
+    assert scored.status_code == 200
+    assert len(title_thumbnail_ai.logger.calls) >= baseline + 2
+
+    briefs = client.post(
+        "/api/v1/ideas/idea-title-thumb/thumbnails/generate-briefs",
+        json={"angle_status": "approved", "titles": [item["title_text"] for item in generated.json()["titles"]]},
+    )
+    assert briefs.status_code == 200
+    assert len(title_thumbnail_ai.logger.calls) >= baseline + 3
+
+    recent_operations = [call.operation for call in title_thumbnail_ai.logger.calls[baseline:]]
+    assert "title_generation" in recent_operations
+    assert "title_scoring" in recent_operations
+    assert "thumbnail_brief_generation" in recent_operations
+    assert len(script_ai.logger.calls) >= 1
+
 def test_compliance_override_persists_audit_and_exposes_manual_override_state() -> None:
     _gen_draft("idea-compliance-override")
     review = client.post("/api/v1/ideas/idea-compliance-override/compliance/review", json={"channel_id": "default"})
