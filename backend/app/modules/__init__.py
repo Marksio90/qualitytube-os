@@ -1,4 +1,5 @@
 from .audio_brief import AudioBrief, AudioBriefRepository, AudioBriefRepositoryError, VoiceStyle
+from .audio_brief_ai import AudioBriefAIGenerationError, AudioBriefAIService, AudioBriefPayload
 from .ai_provider import AIProvider, MockProvider
 from .angle_approval import AngleStatus
 from .channel_memory import ChannelMemory, ChannelMemoryRepository
@@ -60,6 +61,9 @@ from .scripts import (
 
 __all__ = [
     "AIProvider",
+    "AudioBriefAIGenerationError",
+    "AudioBriefAIService",
+    "AudioBriefPayload",
     "AudioBrief",
     "AudioBriefRepository",
     "AudioBriefRepositoryError",
