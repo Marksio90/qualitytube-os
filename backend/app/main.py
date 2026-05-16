@@ -389,14 +389,22 @@ class PublishingPackageService:
         self._assert_angle_approved(angle_status)
         script = self._latest_script_or_409(idea_id)
         report = self._approved_compliance_or_409(idea_id)
+        generated = script_ai.generate_publishing_package(
+            approved_angle=script.angle_id,
+            approved_script_sections=script.sections,
+            compliance_report=report,
+        )
         package = PublishingPackage(
             idea_id=idea_id,
-            title=f"{script.angle_id}: Final Video",
-            description="\n\n".join(f"{section.title.title()}: {section.content}" for section in script.sections),
-            tags=["qualitytube", "education"],
-            chapters=["00:00 - Intro", "00:30 - Main Insight", "04:00 - Action Plan"],
-            thumbnail_brief="Close-up creator face + high-contrast text with one contrarian claim",
-            upload_checklist=["Final proofread", "Sources linked", "Disclosure reviewed"],
+            title=generated.title,
+            description=generated.description,
+            tags=generated.tags,
+            chapters=generated.chapters,
+            pinned_comment=generated.pinned_comment,
+            thumbnail_brief=generated.thumbnail_brief,
+            disclosure_notes=generated.disclosure_notes,
+            source_notes=generated.source_notes,
+            upload_checklist=generated.upload_checklist,
             latest_compliance=report,
             status=PublishingPackageStatus.ready_for_review,
         )
