@@ -10,6 +10,12 @@ from .compliance import (
 )
 from .compliance_checks import ComplianceCheckInput, ComplianceCheckResult, compliance_gate_failures, publishing_blocked, run_compliance_checks
 from .ideas import Idea
+from .publishing_package import (
+    PublishingPackage,
+    PublishingPackageRepository,
+    PublishingPackageRevision,
+    PublishingPackageStatus,
+)
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
 from .script_ai import (
@@ -59,6 +65,10 @@ __all__ = [
     "LLMCallLogger",
     "MockProvider",
     "OutlinePayload",
+    "PublishingPackage",
+    "PublishingPackageRepository",
+    "PublishingPackageRevision",
+    "PublishingPackageStatus",
     "ResearchBrief",
     "ReviewerSource",
     "RiskLevel",
