@@ -16,6 +16,11 @@ from .publishing_package import (
     PublishingPackageRevision,
     PublishingPackageStatus,
 )
+from .publishing_package_validation import (
+    PublishingPackageValidationService,
+    PublishingValidationIssue,
+    PublishingValidationResult,
+)
 from .llm_logging import LLMCall, LLMCallLogger
 from .research_brief import ResearchBrief
 from .script_ai import (
@@ -69,6 +74,9 @@ __all__ = [
     "PublishingPackageRepository",
     "PublishingPackageRevision",
     "PublishingPackageStatus",
+    "PublishingValidationResult",
+    "PublishingValidationIssue",
+    "PublishingPackageValidationService",
     "ResearchBrief",
     "ReviewerSource",
     "RiskLevel",
