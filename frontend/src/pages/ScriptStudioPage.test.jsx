@@ -166,3 +166,56 @@ describe("ScriptStudioPage smoke states", () => {
     expect(container.textContent).toContain("Retention action failed: Retention service timeout");
   });
 });
+
+describe("ScriptStudioPage visual plan tab", () => {
+  it("shows empty visual-plan state then generated state", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    mockFetchSequence([
+      { body: { scripts: [{ id: "s1", state: "approved", sections: [{ title: "hook", content: "This hook is long enough for validation and rendering." }, { title: "body", content: "Body section provides evidence and sequencing for the argument." }, { title: "cta", content: "Ask audience to share one experiment in comments today." }] }] } },
+      { body: { versions: [] } },
+      { ok: false, body: { message: "visual plan not found" } },
+      { body: { visual_plan: { id: "vp1", scenes: [{ id: "sc1", scene_number: 1, narration_excerpt: "A", visual_type: "chart", visual_description: "B", purpose: "C", asset_notes: "note", risk_notes: "risk", filler_risk_score: 3 }] } } },
+    ]);
+
+    await act(async () => { root.render(<ScriptStudioPage />); });
+    await act(async () => { await flush(); await flush(); });
+
+    await act(async () => { Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Visual Plan").click(); });
+    expect(container.textContent).toContain("No visual plan yet. Generate or fetch to start.");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Fetch visual plan").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Visual plan failed: visual plan not found");
+
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Generate visual plan").click();
+      await flush();
+    });
+    expect(container.textContent).toContain("Visual plan generated.");
+    expect(container.textContent).toContain("Scene 1");
+  });
+
+  it("disables approve button when scene validation fails", async () => {
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    mockFetchSequence([
+      { body: { scripts: [{ id: "s1", state: "approved", sections: [{ title: "hook", content: "This hook is long enough for validation and rendering." }, { title: "body", content: "Body section provides evidence and sequencing for the argument." }, { title: "cta", content: "Ask audience to share one experiment in comments today." }] }] } },
+      { body: { versions: [] } },
+      { body: { visual_plan: { id: "vp1", scenes: [{ id: "sc1", scene_number: 1, narration_excerpt: "A", visual_type: "chart", visual_description: "B", purpose: "", asset_notes: "note", risk_notes: "risk", filler_risk_score: 3 }] } } },
+    ]);
+
+    await act(async () => { root.render(<ScriptStudioPage />); });
+    await act(async () => { await flush(); await flush(); });
+    await act(async () => { Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Visual Plan").click(); });
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Generate visual plan").click();
+      await flush();
+    });
+
+    const approveButton = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Approve visual plan");
+    expect(approveButton.disabled).toBe(true);
+  });
+});
