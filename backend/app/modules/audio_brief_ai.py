@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -25,10 +26,15 @@ class AudioBriefPayload(BaseModel):
     pause_notes: str = Field(min_length=1)
     pronunciation_notes: str = Field(min_length=1)
     emphasis_notes: str = Field(min_length=1)
+    synthetic_voice_used: bool
+    disclosure_required: bool
+    disclosure_notes: str = Field(min_length=1)
     export_text: str = Field(min_length=1)
 
 
 class AudioBriefAIService:
+    _AUDIO_BRIEF_PROMPT_PATH = Path(__file__).resolve().parents[3] / "docs" / "prompts" / "audio-brief-generation.md"
+
     def __init__(self, provider: AIProvider | None = None, logger: LLMCallLogger | None = None) -> None:
         self.provider = provider or MockProvider()
         self.logger = logger or LLMCallLogger()
@@ -54,15 +60,12 @@ class AudioBriefAIService:
     ) -> AudioBriefPayload:
         sections_json = json.dumps([section.model_dump() for section in approved_script_sections])
         schema_json = json.dumps(AudioBriefPayload.model_json_schema(), separators=(",", ":"))
+        prompt_template = self._AUDIO_BRIEF_PROMPT_PATH.read_text(encoding="utf-8").strip()
         prompt = (
-            "Generate narration guidance for an audio brief as strict JSON only.\n"
+            f"{prompt_template}\n\n"
             f"Approved angle: {approved_angle}\n"
             f"Approved script sections: {sections_json}\n"
-            f"Policy context: {policy_context}\n"
-            "Constraints:\n"
-            "- Guidance-only output; do not propose, invoke, or integrate any TTS vendor/API/workflow.\n"
-            "- Keep recommendations practical for human narration and editing notes.\n"
-            "- Do not include synthetic_voice_used, disclosure_required, or disclosure_notes fields.\n"
+            f"Policy context: {policy_context}\n\n"
             "Return strict JSON only.\n"
             f"Schema: {schema_json}"
         )

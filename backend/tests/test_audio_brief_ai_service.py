@@ -16,7 +16,7 @@ class MockProvider:
 
 
 def test_audio_brief_strict_json_passes() -> None:
-    provider = MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"calm confidence","pause_notes":"Pause before key numbers.","pronunciation_notes":"Say SaaS as sass.","emphasis_notes":"Stress the contrast sentence.","export_text":"Narration guidance only."}')
+    provider = MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"calm confidence","pause_notes":"Pause before key numbers.","pronunciation_notes":"Say SaaS as sass.","emphasis_notes":"Stress the contrast sentence.","synthetic_voice_used":false,"disclosure_required":false,"disclosure_notes":"No synthetic voice disclosure required.","export_text":"Narration guidance only."}')
     svc = AudioBriefAIService(provider=provider)
 
     result = svc.generate_audio_brief(approved_angle="angle", approved_script_sections=[], policy_context="No paid TTS")
@@ -32,13 +32,13 @@ def test_audio_brief_invalid_json_rejected() -> None:
 
 
 def test_audio_brief_schema_violation_rejected() -> None:
-    svc = AudioBriefAIService(provider=MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"ok","pause_notes":"ok","pronunciation_notes":"ok","emphasis_notes":"ok","export_text":"ok","synthetic_voice_used":true}'))
+    svc = AudioBriefAIService(provider=MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"ok","pause_notes":"ok","pronunciation_notes":"ok","emphasis_notes":"ok","export_text":"ok","synthetic_voice_used":true,"disclosure_required":true}'))
     with pytest.raises(AudioBriefAIGenerationError, match="did not match schema"):
         svc.generate_audio_brief(approved_angle="angle", approved_script_sections=[], policy_context="policy")
 
 
 def test_audio_brief_logs_operation_name() -> None:
-    svc = AudioBriefAIService(provider=MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"calm confidence","pause_notes":"Pause before key numbers.","pronunciation_notes":"Say SaaS as sass.","emphasis_notes":"Stress the contrast sentence.","export_text":"Narration guidance only."}'))
+    svc = AudioBriefAIService(provider=MockProvider('{"voice_style":"educational_neutral","pace_wpm":130,"emotional_tone":"calm confidence","pause_notes":"Pause before key numbers.","pronunciation_notes":"Say SaaS as sass.","emphasis_notes":"Stress the contrast sentence.","synthetic_voice_used":false,"disclosure_required":false,"disclosure_notes":"No synthetic voice disclosure required.","export_text":"Narration guidance only."}'))
     before = len(svc.logger.calls)
     svc.generate_audio_brief(approved_angle="angle", approved_script_sections=[], policy_context="policy")
     assert len(svc.logger.calls) == before + 1
