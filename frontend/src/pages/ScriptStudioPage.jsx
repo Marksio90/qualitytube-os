@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { VisualPlanTab } from "../components/VisualPlanTab";
 
 const DEFAULT_IDEA_ID = "idea-studio-demo";
 const DEFAULT_ANGLE_ID = "angle-studio-demo";
@@ -156,6 +157,7 @@ export function ScriptStudioPage() {
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <button onClick={() => setActiveTab("editor")} aria-pressed={activeTab === "editor"}>Editor</button>
         <button onClick={() => setActiveTab("hooks")} aria-pressed={activeTab === "hooks"}>Hook & Retention</button>
+        <button onClick={() => setActiveTab("visual-plan")} aria-pressed={activeTab === "visual-plan"}>Visual Plan</button>
       </div>
       {activeTab === "editor" && <section style={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: 16 }}>
         <aside>
@@ -243,6 +245,11 @@ export function ScriptStudioPage() {
             )}
           </div>
         </section>
+      )}
+
+
+      {activeTab === "visual-plan" && (
+        <VisualPlanTab scriptId={script.id} api={api} disabled={saving} />
       )}
     </main>
   );
