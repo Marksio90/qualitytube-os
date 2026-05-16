@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageRepository, PublishingPackageStatus, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -358,6 +358,10 @@ class PublishingPackageApproveRequest(BaseModel):
     angle_status: str = Field(min_length=1)
 
 
+class PublishingPackageValidationResponse(BaseModel):
+    result: PublishingValidationResult
+
+
 class PublishingPackageExportResponse(BaseModel):
     format: str
     content: str | dict[str, Any]
@@ -366,6 +370,7 @@ class PublishingPackageExportResponse(BaseModel):
 class PublishingPackageService:
     def __init__(self, repository: PublishingPackageRepository) -> None:
         self.repository = repository
+        self.validation_service = PublishingPackageValidationService()
 
     def _latest_script_or_409(self, idea_id: str) -> Script:
         script = repo.get_script(idea_id)
@@ -413,12 +418,30 @@ class PublishingPackageService:
         except ValueError as exc:
             raise _api_error(409, "PUBLISHING_PACKAGE_EXISTS", "publishing package already exists for idea", {"idea_id": idea_id}) from exc
 
-    def approve(self, idea_id: str, angle_status: str) -> PublishingPackage:
+    def validate(self, idea_id: str, angle_status: str) -> PublishingValidationResult:
         self._assert_angle_approved(angle_status)
-        self._latest_script_or_409(idea_id)
+        script = self._latest_script_or_409(idea_id)
         report = self._approved_compliance_or_409(idea_id)
-        if report.overall_risk == RiskLevel.high:
-            raise _api_error(409, "PUBLISHING_APPROVAL_BLOCKED", "cannot approve publishing package when compliance overall_risk is high", {"idea_id": idea_id, "report_id": str(report.id), "overall_risk": report.overall_risk.value})
+        package = self.repository.get_package(idea_id)
+        if package is None:
+            raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
+        return self.validation_service.validate(
+            package=package,
+            script=script,
+            compliance_overall_risk=report.overall_risk,
+            synthetic_disclosure_required=report.synthetic_content_disclosure_required,
+        )
+
+    def approve(self, idea_id: str, angle_status: str) -> PublishingPackage:
+        validation_result = self.validate(idea_id, angle_status)
+        if not validation_result.eligible_for_approval:
+            raise _api_error(
+                409,
+                "PUBLISHING_APPROVAL_BLOCKED",
+                "cannot approve publishing package until validation passes",
+                {"idea_id": idea_id, "errors": [error.model_dump() for error in validation_result.errors]},
+            )
+        report = self._approved_compliance_or_409(idea_id)
         existing = self.repository.get_package(idea_id)
         if existing is None:
             raise _api_error(404, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package not found", {"idea_id": idea_id})
@@ -734,6 +757,11 @@ def update_publishing_package(idea_id: str, payload: PublishingPackageUpdateRequ
     updated = existing.model_copy(update=updates)
     publishing_repo.revise_package(idea_id, updated, "manual-update")
     return updated
+
+
+@app.post("/api/v1/ideas/{idea_id}/publishing-package/validate", response_model=PublishingPackageValidationResponse)
+def validate_publishing_package(idea_id: str, payload: PublishingPackageApproveRequest) -> PublishingPackageValidationResponse:
+    return PublishingPackageValidationResponse(result=publishing_service.validate(idea_id, payload.angle_status))
 
 
 @app.post("/api/v1/ideas/{idea_id}/publishing-package/approve", response_model=PublishingPackage)
