@@ -33,6 +33,18 @@ class ApprovalState(StrEnum):
     overridden = "overridden"
 
 
+class ComplianceOverrideAuditEntry(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    approver: str = Field(min_length=1)
+    reason: str = Field(min_length=12)
+    previous_recommendation: ComplianceRecommendation
+    previous_overall_risk: RiskLevel
+    overridden_recommendation: ComplianceRecommendation
+    overridden_overall_risk: RiskLevel
+
+
 class ComplianceReport(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -60,6 +72,10 @@ class ComplianceReport(BaseModel):
     approval_state: ApprovalState = ApprovalState.pending
     override_reason: str | None = None
     override_actor: str | None = None
+    override_recommendation: ComplianceRecommendation | None = None
+    override_overall_risk: RiskLevel | None = None
+    is_manually_overridden: bool = False
+    override_audit_log: list[ComplianceOverrideAuditEntry] = Field(default_factory=list)
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -123,5 +139,10 @@ class ComplianceReport(BaseModel):
         if self.approval_state == ApprovalState.overridden:
             if self.override_reason is None or self.override_actor is None:
                 raise ValueError("override_reason and override_actor are required when approval_state is overridden")
+            if self.override_recommendation is None or self.override_overall_risk is None:
+                raise ValueError("override outcome is required when approval_state is overridden")
+
+        if self.is_manually_overridden != (self.approval_state == ApprovalState.overridden):
+            raise ValueError("is_manually_overridden must reflect approval_state")
 
         return self

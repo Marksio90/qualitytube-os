@@ -144,8 +144,10 @@ class ComplianceApprovalRequest(BaseModel):
 
 
 class ComplianceOverrideRequest(BaseModel):
-    reason: str = Field(min_length=1)
+    reason: str = Field(min_length=12)
     approver: str = Field(min_length=1)
+    outcome_recommendation: ComplianceRecommendation
+    outcome_overall_risk: RiskLevel
 
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
@@ -625,11 +627,33 @@ def override_compliance_report(report_id: UUID, payload: ComplianceOverrideReque
         raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "compliance report not found", {"report_id": str(report_id)})
     reason = payload.reason.strip()
     approver = payload.approver.strip()
-    if not reason:
+    if len(reason) < 12:
         raise _api_error(422, "OVERRIDE_REASON_REQUIRED", "override reason is required")
     if not approver:
         raise _api_error(422, "OVERRIDE_APPROVER_REQUIRED", "override approver identity is required")
-    updated = report.model_copy(update={"approval_state": ApprovalState.overridden, "override_reason": reason, "override_actor": approver, "reviewer_source": ReviewerSource.human_override, "updated_at": datetime.now(UTC)})
+    timestamp = datetime.now(UTC)
+    audit_entry = {
+        "timestamp": timestamp,
+        "approver": approver,
+        "reason": reason,
+        "previous_recommendation": report.recommendation,
+        "previous_overall_risk": report.overall_risk,
+        "overridden_recommendation": payload.outcome_recommendation,
+        "overridden_overall_risk": payload.outcome_overall_risk,
+    }
+    updated = report.model_copy(
+        update={
+            "approval_state": ApprovalState.overridden,
+            "override_reason": reason,
+            "override_actor": approver,
+            "override_recommendation": payload.outcome_recommendation,
+            "override_overall_risk": payload.outcome_overall_risk,
+            "is_manually_overridden": True,
+            "override_audit_log": [*report.override_audit_log, audit_entry],
+            "reviewer_source": ReviewerSource.human_override,
+            "updated_at": timestamp,
+        }
+    )
     compliance_reports_by_id[report_id] = updated
     compliance_reports_by_idea[updated.idea_id] = [updated if item.id == report_id else item for item in compliance_reports_by_idea.get(updated.idea_id, [])]
     return ComplianceReportResponse(report=updated)
