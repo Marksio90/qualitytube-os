@@ -161,3 +161,9 @@ class PublishingPackageRepository:
 
     def get_revisions(self, package_id: UUID) -> tuple[PublishingPackageRevision, ...]:
         return tuple(self._revisions_by_package_id.get(package_id, []))
+
+    def get_package_by_id(self, package_id: UUID) -> PublishingPackage | None:
+        revisions = self._revisions_by_package_id.get(package_id)
+        if not revisions:
+            return None
+        return revisions[-1].package_snapshot

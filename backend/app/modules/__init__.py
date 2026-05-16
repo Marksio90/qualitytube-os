@@ -16,6 +16,7 @@ from .publishing_package import (
     PublishingPackageRevision,
     PublishingPackageStatus,
 )
+from .publishing_package_export import PublishingPackageExportFormat, PublishingPackageExportService
 from .publishing_package_validation import (
     PublishingPackageValidationService,
     PublishingValidationIssue,
@@ -77,6 +78,8 @@ __all__ = [
     "PublishingValidationResult",
     "PublishingValidationIssue",
     "PublishingPackageValidationService",
+    "PublishingPackageExportFormat",
+    "PublishingPackageExportService",
     "ResearchBrief",
     "ReviewerSource",
     "RiskLevel",
