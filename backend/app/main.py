@@ -344,6 +344,40 @@ def _get_script_or_404(script_id: UUID) -> Script:
     return script
 
 
+
+
+def _render_thumbnail_brief(concept: ThumbnailConcept) -> str:
+    return "\n".join(
+        [
+            f"Main object: {concept.main_object}",
+            f"Emotion: {concept.emotion}",
+            f"Composition: {concept.composition}",
+            f"Text overlay: {concept.text_overlay}",
+            f"Visual contrast: {concept.visual_contrast}",
+            f"Mobile readability: {concept.mobile_readability_notes}",
+            f"Avoid: {concept.avoid}",
+        ]
+    )
+
+
+def _sync_title_selection_to_publishing_package(idea_id: str, selected: TitleVariant) -> None:
+    package = publishing_repo.get_package(idea_id)
+    if package is None:
+        raise _api_error(409, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package must exist before selecting a title", {"idea_id": idea_id})
+    updated = package.model_copy(update={"title": selected.title_text})
+    try:
+        publishing_repo.revise_package(idea_id, updated, "title-selected")
+    except ValueError as exc:
+        raise _api_error(422, "PUBLISHING_PACKAGE_SYNC_INVALID", "selected title violates publishing package constraints", {"idea_id": idea_id}) from exc
+
+
+def _sync_thumbnail_selection_to_publishing_package(idea_id: str, selected: ThumbnailConcept) -> None:
+    package = publishing_repo.get_package(idea_id)
+    if package is None:
+        raise _api_error(409, "PUBLISHING_PACKAGE_NOT_FOUND", "publishing package must exist before selecting a thumbnail", {"idea_id": idea_id})
+    updated = package.model_copy(update={"thumbnail_brief": _render_thumbnail_brief(selected)})
+    publishing_repo.revise_package(idea_id, updated, "thumbnail-selected")
+
 def _approved_script_or_409(idea_id: str) -> Script:
     script = repo.get_script(idea_id)
     if script is None or script.state != ScriptState.approved:
@@ -778,6 +812,7 @@ def select_title(title_id: UUID) -> SelectTitleResponse:
     for idea_id in {script.idea_id for script in script_by_id.values()}:
         try:
             selected = title_thumbnail_repo.select_title_variant(idea_id, title_id)
+            _sync_title_selection_to_publishing_package(idea_id, selected)
             return SelectTitleResponse(title=selected)
         except KeyError:
             continue
@@ -824,6 +859,7 @@ def select_thumbnail(thumbnail_id: UUID) -> SelectThumbnailResponse:
     for idea_id in {script.idea_id for script in script_by_id.values()}:
         try:
             selected = title_thumbnail_repo.select_thumbnail_concept(idea_id, thumbnail_id)
+            _sync_thumbnail_selection_to_publishing_package(idea_id, selected)
             return SelectThumbnailResponse(thumbnail=selected)
         except KeyError:
             continue

@@ -260,3 +260,74 @@ def test_export_publishing_package_rejects_unsupported_format() -> None:
     assert detail["code"] == "UNSUPPORTED_EXPORT_FORMAT"
     assert detail["details"]["received_format"] == "xml"
     assert set(detail["details"]["supported_formats"]) == {"json", "markdown"}
+
+
+def test_title_thumbnail_selection_syncs_to_publishing_package_and_revisions() -> None:
+    from app.main import publishing_repo
+
+    _gen_draft("idea-selection-sync")
+    package_resp = client.post(
+        "/api/v1/ideas/idea-selection-sync/publishing-package",
+        json={"angle_status": "approved"},
+    )
+    assert package_resp.status_code == 200
+    package_id = package_resp.json()["id"]
+
+    titles = client.post(
+        "/api/v1/ideas/idea-selection-sync/titles/generate",
+        json={"angle_status": "approved"},
+    )
+    assert titles.status_code == 200
+    selected_title = titles.json()["titles"][0]
+    select_title = client.post(f"/api/v1/titles/{selected_title['id']}/select")
+    assert select_title.status_code == 200
+
+    package_after_title = client.get("/api/v1/ideas/idea-selection-sync/publishing-package")
+    assert package_after_title.status_code == 200
+    assert package_after_title.json()["title"] == selected_title["title_text"]
+
+    briefs = client.post(
+        "/api/v1/ideas/idea-selection-sync/thumbnails/generate-briefs",
+        json={"angle_status": "approved", "titles": [selected_title["title_text"]]},
+    )
+    assert briefs.status_code == 200
+    selected_thumb = briefs.json()["thumbnails"][0]
+    select_thumbnail = client.post(f"/api/v1/thumbnails/{selected_thumb['id']}/select")
+    assert select_thumbnail.status_code == 200
+
+    package_after_thumbnail = client.get("/api/v1/ideas/idea-selection-sync/publishing-package")
+    assert package_after_thumbnail.status_code == 200
+    thumb_brief = package_after_thumbnail.json()["thumbnail_brief"]
+    assert "Main object:" in thumb_brief
+    assert selected_thumb["main_object"] in thumb_brief
+    assert selected_thumb["text_overlay"] in thumb_brief
+
+    revisions = publishing_repo.get_revisions(package_id)
+    assert len(revisions) >= 3
+    assert revisions[-2].editor_event == "title-selected"
+    assert revisions[-1].editor_event == "thumbnail-selected"
+
+
+def test_selection_requires_existing_publishing_package() -> None:
+    _gen_draft("idea-selection-no-package")
+    titles = client.post(
+        "/api/v1/ideas/idea-selection-no-package/titles/generate",
+        json={"angle_status": "approved"},
+    )
+    assert titles.status_code == 200
+    title_id = titles.json()["titles"][0]["id"]
+
+    title_select = client.post(f"/api/v1/titles/{title_id}/select")
+    assert title_select.status_code == 409
+    assert title_select.json()["detail"]["code"] == "PUBLISHING_PACKAGE_NOT_FOUND"
+
+    briefs = client.post(
+        "/api/v1/ideas/idea-selection-no-package/thumbnails/generate-briefs",
+        json={"angle_status": "approved", "titles": [titles.json()["titles"][0]["title_text"]]},
+    )
+    assert briefs.status_code == 200
+    thumb_id = briefs.json()["thumbnails"][0]["id"]
+
+    thumbnail_select = client.post(f"/api/v1/thumbnails/{thumb_id}/select")
+    assert thumbnail_select.status_code == 409
+    assert thumbnail_select.json()["detail"]["code"] == "PUBLISHING_PACKAGE_NOT_FOUND"
