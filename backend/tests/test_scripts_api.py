@@ -116,3 +116,48 @@ def test_script_studio_negative_cases() -> None:
     missing_revision = client.get(f"/api/v1/scripts/{script_id}/compare", params={"from_revision": 1, "to_revision": 999})
     assert missing_revision.status_code == 404
     assert missing_revision.json()["detail"]["code"] == "REVISION_NOT_FOUND"
+
+
+def test_compliance_override_persists_audit_and_exposes_manual_override_state() -> None:
+    _gen_draft("idea-compliance-override")
+    review = client.post("/api/v1/ideas/idea-compliance-override/compliance/review", json={"channel_id": "default"})
+    assert review.status_code == 200
+    report = review.json()["report"]
+    report_id = report["id"]
+    original_recommendation = report["recommendation"]
+    original_risk = report["overall_risk"]
+
+    override = client.post(
+        f"/api/v1/compliance/{report_id}/override",
+        json={
+            "reason": "Editorial and legal jointly approved this publication exception.",
+            "approver": "policy-admin",
+            "outcome_recommendation": "approve_with_fixes",
+            "outcome_overall_risk": "medium",
+        },
+    )
+    assert override.status_code == 200
+    overridden = override.json()["report"]
+    assert overridden["approval_state"] == "overridden"
+    assert overridden["is_manually_overridden"] is True
+    assert overridden["override_recommendation"] == "approve_with_fixes"
+    assert overridden["override_overall_risk"] == "medium"
+    assert overridden["recommendation"] == original_recommendation
+    assert overridden["overall_risk"] == original_risk
+    assert len(overridden["override_audit_log"]) == 1
+    audit = overridden["override_audit_log"][0]
+    assert audit["approver"] == "policy-admin"
+    assert audit["reason"] == "Editorial and legal jointly approved this publication exception."
+    assert audit["previous_recommendation"] == original_recommendation
+    assert audit["previous_overall_risk"] == original_risk
+    assert audit["overridden_recommendation"] == "approve_with_fixes"
+    assert audit["overridden_overall_risk"] == "medium"
+    assert audit["timestamp"]
+
+    latest = client.get("/api/v1/ideas/idea-compliance-override/compliance/latest")
+    assert latest.status_code == 200
+    assert latest.json()["report"]["is_manually_overridden"] is True
+
+    listed = client.get("/api/v1/ideas/idea-compliance-override/compliance/reports")
+    assert listed.status_code == 200
+    assert listed.json()["reports"][-1]["is_manually_overridden"] is True
