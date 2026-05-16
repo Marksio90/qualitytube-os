@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailAIService, TitleThumbnailLabRepository, TitleVariant, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailAIService, TitleThumbnailLabRepository, TitleVariant, VisualPlan, VisualPlanApprovalState, VisualPlanRepository, VisualScene, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -199,6 +199,28 @@ class ComplianceOverrideRequest(BaseModel):
     outcome_recommendation: ComplianceRecommendation
     outcome_overall_risk: RiskLevel
 
+
+class GenerateVisualPlanResponse(BaseModel):
+    plan: VisualPlan
+
+
+class GetVisualPlanResponse(BaseModel):
+    plan: VisualPlan
+
+
+class UpdateVisualPlanRequest(BaseModel):
+    scenes: list[VisualScene]
+
+
+class UpdateVisualPlanResponse(BaseModel):
+    plan: VisualPlan
+
+
+class ApproveVisualPlanResponse(BaseModel):
+    plan: VisualPlan
+    already_approved: bool = False
+
+
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         self.code = code
@@ -215,6 +237,7 @@ compliance_reports_by_id: dict[UUID, ComplianceReport] = {}
 publishing_repo = PublishingPackageRepository()
 title_thumbnail_repo = TitleThumbnailLabRepository()
 title_thumbnail_ai = TitleThumbnailAIService()
+visual_plan_repo = VisualPlanRepository()
 
 
 # Seed sample memory for local/dev flows.
@@ -342,6 +365,25 @@ def _get_script_or_404(script_id: UUID) -> Script:
     if script is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
     return script
+
+
+def _approved_script_or_409_by_id(script_id: UUID) -> Script:
+    script = _get_script_or_404(script_id)
+    if script.state != ScriptState.approved:
+        raise _api_error(
+            409,
+            "SCRIPT_APPROVAL_REQUIRED",
+            "approved script is required before this operation",
+            {"script_id": str(script_id), "script_state": script.state.value},
+        )
+    return script
+
+
+def _visual_plan_or_404(visual_plan_id: UUID) -> VisualPlan:
+    plan = visual_plan_repo.get_by_visual_plan_id(visual_plan_id)
+    if plan is None:
+        raise _api_error(404, "VISUAL_PLAN_NOT_FOUND", "visual plan not found", {"visual_plan_id": str(visual_plan_id)})
+    return plan
 
 
 
@@ -729,6 +771,54 @@ def generate_hooks(script_id: UUID) -> GenerateHooksResponse:
     generated = script_ai.generate_hooks(angle=script.angle_id, channel_memory=channel_context, sections=script.sections)
     hooks = list(repo.create_hook_variants(script_id, generated.variants))
     return GenerateHooksResponse(script_id=script_id, hooks=hooks)
+
+
+@app.post("/api/v1/scripts/{script_id}/visual-plan/generate", response_model=GenerateVisualPlanResponse)
+def generate_visual_plan(script_id: UUID) -> GenerateVisualPlanResponse:
+    script = _approved_script_or_409_by_id(script_id)
+    channel_context, _ = _build_script_studio_context(channel_id="default", script=script)
+    generated = script_ai.generate_visual_plan(
+        approved_script_sections=script.sections,
+        approved_angle=script.angle_id,
+        channel_memory=channel_context,
+    )
+    plan = VisualPlan(script_id=script_id, scenes=[VisualScene(**scene.model_dump()) for scene in generated.scenes])
+    persisted = visual_plan_repo.create_or_update(plan)
+    return GenerateVisualPlanResponse(plan=persisted)
+
+
+@app.get("/api/v1/scripts/{script_id}/visual-plan", response_model=GetVisualPlanResponse)
+def get_visual_plan(script_id: UUID) -> GetVisualPlanResponse:
+    _get_script_or_404(script_id)
+    plan = visual_plan_repo.get_by_script_id(script_id)
+    if plan is None:
+        raise _api_error(404, "VISUAL_PLAN_NOT_FOUND", "visual plan not found", {"script_id": str(script_id)})
+    return GetVisualPlanResponse(plan=plan)
+
+
+@app.patch("/api/v1/visual-plans/{visual_plan_id}", response_model=UpdateVisualPlanResponse)
+def update_visual_plan(visual_plan_id: UUID, payload: UpdateVisualPlanRequest) -> UpdateVisualPlanResponse:
+    existing = _visual_plan_or_404(visual_plan_id)
+    updated = existing.model_copy(update={"scenes": payload.scenes})
+    try:
+        persisted = visual_plan_repo.create_or_update(updated)
+    except ValueError as exc:
+        raise _api_error(422, "VISUAL_PLAN_VALIDATION_FAILED", "visual plan update failed validation", {"error": str(exc)}) from exc
+    return UpdateVisualPlanResponse(plan=persisted)
+
+
+@app.post("/api/v1/visual-plans/{visual_plan_id}/approve", response_model=ApproveVisualPlanResponse)
+def approve_visual_plan(visual_plan_id: UUID) -> ApproveVisualPlanResponse:
+    existing = _visual_plan_or_404(visual_plan_id)
+    if existing.approval_state == VisualPlanApprovalState.approved:
+        raise _api_error(
+            409,
+            "VISUAL_PLAN_ALREADY_APPROVED",
+            "visual plan is already approved",
+            {"visual_plan_id": str(visual_plan_id)},
+        )
+    approved = visual_plan_repo.approve(visual_plan_id)
+    return ApproveVisualPlanResponse(plan=approved, already_approved=False)
 
 
 @app.get("/api/v1/scripts/{script_id}/hooks", response_model=ListHooksResponse)
