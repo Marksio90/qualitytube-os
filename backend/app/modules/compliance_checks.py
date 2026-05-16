@@ -92,23 +92,29 @@ def run_compliance_checks(check_input: ComplianceCheckInput) -> ComplianceCheckR
     )
 
 
-def publishing_blocked(*, report: ComplianceReport, required_fixes_resolved: bool = True) -> bool:
+def compliance_gate_failures(*, report: ComplianceReport, required_fixes_resolved: bool = True) -> list[dict[str, object]]:
+    failures: list[dict[str, object]] = []
+
     if report.overall_risk == RiskLevel.high:
-        return True
+        failures.append({"rule": "overall_risk_not_high", "actual": report.overall_risk.value})
 
     if report.recommendation == ComplianceRecommendation.do_not_publish:
-        return True
+        failures.append({"rule": "recommendation_not_do_not_publish", "actual": report.recommendation.value})
 
     if report.required_fixes and not required_fixes_resolved:
-        return True
+        failures.append({"rule": "required_fixes_resolved", "actual": report.required_fixes})
 
     if report.synthetic_content_disclosure_required and not _bool_from_evidence(report.originality_evidence):
-        return True
+        failures.append({"rule": "synthetic_disclosure_present_when_required", "actual": report.originality_evidence})
 
     if not _bool_from_evidence(report.human_contribution_evidence):
-        return True
+        failures.append({"rule": "human_contribution_evidence_present", "actual": report.human_contribution_evidence})
 
-    return False
+    return failures
+
+
+def publishing_blocked(*, report: ComplianceReport, required_fixes_resolved: bool = True) -> bool:
+    return bool(compliance_gate_failures(report=report, required_fixes_resolved=required_fixes_resolved))
 
 
 def _repeated_bigram_count(words: list[str]) -> int:

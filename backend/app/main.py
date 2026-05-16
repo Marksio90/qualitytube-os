@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, publishing_blocked, run_compliance_checks
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -288,6 +288,21 @@ def _get_script_or_404(script_id: UUID) -> Script:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="SCRIPT_NOT_FOUND", message="script not found").model_dump())
     return script
 
+
+
+def _latest_compliance_report_or_409(idea_id: str) -> ComplianceReport:
+    reports = compliance_reports_by_idea.get(idea_id, [])
+    if not reports:
+        raise _api_error(409, "COMPLIANCE_REPORT_REQUIRED", "latest compliance report is required before marking ready_to_publish", {"idea_id": idea_id})
+    return reports[-1]
+
+
+def _enforce_ready_to_publish_compliance(idea_id: str) -> None:
+    latest_report = _latest_compliance_report_or_409(idea_id)
+    failures = compliance_gate_failures(report=latest_report, required_fixes_resolved=not bool(latest_report.required_fixes))
+    if failures:
+        raise _api_error(409, "READY_TO_PUBLISH_BLOCKED", "ready_to_publish blocked by compliance preconditions", {"idea_id": idea_id, "report_id": str(latest_report.id), "failures": failures})
+
 def _enforce_approval_gates(script: Script, gates: GateRule) -> None:
     if not script.sections:
         raise GateFailed("EMPTY_SCRIPT", "script content is empty")
@@ -388,6 +403,8 @@ def patch_script(script_id: UUID, payload: UpdateScriptRequest) -> Script:
     if payload.sections is not None:
         updates["sections"] = payload.sections
     if payload.state is not None:
+        if payload.state == ScriptState.ready_to_publish:
+            _enforce_ready_to_publish_compliance(script.idea_id)
         updates["state"] = payload.state
     updated = script.model_copy(update=updates)
     repo.revise_script(script.idea_id, updated, payload.editor_event)
@@ -591,9 +608,9 @@ def approve_compliance_report(report_id: UUID, payload: ComplianceApprovalReques
     report = compliance_reports_by_id.get(report_id)
     if report is None:
         raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "compliance report not found", {"report_id": str(report_id)})
-    has_blockers = publishing_blocked(report=report, required_fixes_resolved=False)
-    if has_blockers:
-        raise _api_error(409, "COMPLIANCE_BLOCKED", "blocking compliance conditions must be resolved before approval", {"report_id": str(report_id)})
+    failures = compliance_gate_failures(report=report, required_fixes_resolved=False)
+    if failures:
+        raise _api_error(409, "COMPLIANCE_BLOCKED", "blocking compliance conditions must be resolved before approval", {"report_id": str(report_id), "failures": failures})
     updated = report.model_copy(update={"approval_state": ApprovalState.approved, "updated_at": datetime.now(UTC), "reviewer_notes": f"{report.reviewer_notes} Approved by {payload.approver}.".strip()})
     compliance_reports_by_id[report_id] = updated
     compliance_reports_by_idea[updated.idea_id] = [updated if item.id == report_id else item for item in compliance_reports_by_idea.get(updated.idea_id, [])]
