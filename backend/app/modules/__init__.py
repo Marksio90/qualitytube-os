@@ -1,3 +1,4 @@
+from .audio_brief import AudioBrief, AudioBriefRepository, AudioBriefRepositoryError, VoiceStyle
 from .ai_provider import AIProvider, MockProvider
 from .angle_approval import AngleStatus
 from .channel_memory import ChannelMemory, ChannelMemoryRepository
@@ -59,6 +60,9 @@ from .scripts import (
 
 __all__ = [
     "AIProvider",
+    "AudioBrief",
+    "AudioBriefRepository",
+    "AudioBriefRepositoryError",
     "AngleStatus",
     "ChannelMemory",
     "ChannelMemoryRepository",
@@ -117,5 +121,6 @@ __all__ = [
     "VisualPlanRepository",
     "VisualScene",
     "VisualType",
+    "VoiceStyle",
     "ScriptVersion",
 ]
