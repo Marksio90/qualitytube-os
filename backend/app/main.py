@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailAIService, TitleThumbnailLabRepository, TitleVariant, VisualPlan, VisualPlanApprovalState, VisualPlanRepository, VisualScene, compliance_gate_failures, run_compliance_checks
+from .modules import ApprovalState, AudioBrief, AudioBriefAIGenerationError, AudioBriefAIService, AudioBriefRepository, AudioBriefRepositoryError, ChannelMemory, ChannelMemoryRepository, ComplianceCheckInput, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, PublishingPackage, PublishingPackageExportFormat, PublishingPackageExportService, PublishingPackageRepository, PublishingPackageStatus, PublishingPackageValidationService, PublishingValidationResult, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState, ThumbnailConcept, TitleThumbnailAIService, TitleThumbnailLabRepository, TitleVariant, VisualPlan, VisualPlanApprovalState, VisualPlanRepository, VisualScene, VoiceStyle, compliance_gate_failures, run_compliance_checks
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -221,6 +221,40 @@ class ApproveVisualPlanResponse(BaseModel):
     already_approved: bool = False
 
 
+class GenerateAudioBriefResponse(BaseModel):
+    audio_brief: AudioBrief
+
+
+class GetAudioBriefResponse(BaseModel):
+    audio_brief: AudioBrief
+
+
+class UpdateAudioBriefRequest(BaseModel):
+    voice_style: VoiceStyle
+    pace_wpm: int = Field(ge=90, le=220)
+    emotional_tone: str = Field(min_length=1)
+    pause_notes: str = Field(min_length=1)
+    pronunciation_notes: str = Field(min_length=1)
+    emphasis_notes: str = Field(min_length=1)
+    synthetic_voice_used: bool
+    disclosure_required: bool
+    disclosure_notes: str | None = None
+    export_text: str = Field(min_length=1)
+
+
+class UpdateAudioBriefResponse(BaseModel):
+    audio_brief: AudioBrief
+
+
+class ApproveAudioBriefResponse(BaseModel):
+    audio_brief: AudioBrief
+
+
+class ExportAudioBriefResponse(BaseModel):
+    audio_brief_id: UUID
+    export_text: str
+
+
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         self.code = code
@@ -238,6 +272,8 @@ publishing_repo = PublishingPackageRepository()
 title_thumbnail_repo = TitleThumbnailLabRepository()
 title_thumbnail_ai = TitleThumbnailAIService()
 visual_plan_repo = VisualPlanRepository()
+audio_brief_repo = AudioBriefRepository()
+audio_brief_ai = AudioBriefAIService()
 
 
 # Seed sample memory for local/dev flows.
@@ -384,6 +420,14 @@ def _visual_plan_or_404(visual_plan_id: UUID) -> VisualPlan:
     if plan is None:
         raise _api_error(404, "VISUAL_PLAN_NOT_FOUND", "visual plan not found", {"visual_plan_id": str(visual_plan_id)})
     return plan
+
+
+def _audio_brief_by_id_or_404(audio_brief_id: UUID) -> AudioBrief:
+    for script_briefs in audio_brief_repo._by_script.values():
+        brief = script_briefs.get(audio_brief_id)
+        if brief is not None:
+            return brief
+    raise _api_error(404, "AUDIO_BRIEF_NOT_FOUND", "audio brief not found", {"audio_brief_id": str(audio_brief_id)})
 
 
 
@@ -794,6 +838,76 @@ def get_visual_plan(script_id: UUID) -> GetVisualPlanResponse:
     if plan is None:
         raise _api_error(404, "VISUAL_PLAN_NOT_FOUND", "visual plan not found", {"script_id": str(script_id)})
     return GetVisualPlanResponse(plan=plan)
+
+
+@app.post("/api/v1/scripts/{script_id}/audio-brief/generate", response_model=GenerateAudioBriefResponse)
+def generate_audio_brief(script_id: UUID) -> GenerateAudioBriefResponse:
+    script = _approved_script_or_409_by_id(script_id)
+    try:
+        generated = audio_brief_ai.generate_audio_brief(
+            approved_angle=script.angle_id,
+            approved_script_sections=script.sections,
+            policy_context="disclosure_required=true when synthetic_voice_used=true",
+        )
+        brief = AudioBrief(script_id=script_id, **generated.model_dump())
+    except (AudioBriefAIGenerationError, ValueError) as exc:
+        raise _api_error(422, "AUDIO_BRIEF_GENERATION_FAILED", "audio brief generation failed validation", {"error": str(exc)}) from exc
+    try:
+        persisted = audio_brief_repo.create(brief)
+    except AudioBriefRepositoryError as exc:
+        raise _api_error(exc.status_code, exc.code, exc.detail, {"script_id": str(script_id)}) from exc
+    return GenerateAudioBriefResponse(audio_brief=persisted)
+
+
+@app.get("/api/v1/scripts/{script_id}/audio-brief", response_model=GetAudioBriefResponse)
+def get_audio_brief(script_id: UUID) -> GetAudioBriefResponse:
+    _get_script_or_404(script_id)
+    latest = None
+    for brief in audio_brief_repo._by_script.get(script_id, {}).values():
+        if latest is None or brief.created_at > latest.created_at:
+            latest = brief
+    if latest is None:
+        raise _api_error(404, "AUDIO_BRIEF_NOT_FOUND", "audio brief not found", {"script_id": str(script_id)})
+    return GetAudioBriefResponse(audio_brief=latest)
+
+
+@app.patch("/api/v1/audio-briefs/{audio_brief_id}", response_model=UpdateAudioBriefResponse)
+def update_audio_brief(audio_brief_id: UUID, payload: UpdateAudioBriefRequest) -> UpdateAudioBriefResponse:
+    existing = _audio_brief_by_id_or_404(audio_brief_id)
+    updated = existing.model_copy(update=payload.model_dump())
+    try:
+        persisted = audio_brief_repo.update(existing.script_id, updated)
+    except AudioBriefRepositoryError as exc:
+        raise _api_error(exc.status_code, exc.code, exc.detail, {"audio_brief_id": str(audio_brief_id)}) from exc
+    except ValueError as exc:
+        raise _api_error(422, "AUDIO_BRIEF_VALIDATION_FAILED", "audio brief update failed validation", {"error": str(exc)}) from exc
+    return UpdateAudioBriefResponse(audio_brief=persisted)
+
+
+@app.post("/api/v1/audio-briefs/{audio_brief_id}/approve", response_model=ApproveAudioBriefResponse)
+def approve_audio_brief(audio_brief_id: UUID) -> ApproveAudioBriefResponse:
+    existing = _audio_brief_by_id_or_404(audio_brief_id)
+    try:
+        approved = audio_brief_repo.approve(existing.script_id, audio_brief_id)
+    except AudioBriefRepositoryError as exc:
+        raise _api_error(exc.status_code, exc.code, exc.detail, {"audio_brief_id": str(audio_brief_id)}) from exc
+    return ApproveAudioBriefResponse(audio_brief=approved)
+
+
+@app.post("/api/v1/audio-briefs/{audio_brief_id}/export", response_model=ExportAudioBriefResponse)
+def export_audio_brief(audio_brief_id: UUID) -> ExportAudioBriefResponse:
+    brief = _audio_brief_by_id_or_404(audio_brief_id)
+    _approved_script_or_409_by_id(brief.script_id)
+    if brief.approval_state != ApprovalState.approved:
+        raise _api_error(
+            409,
+            "AUDIO_BRIEF_APPROVAL_REQUIRED",
+            "approved audio brief is required before export",
+            {"audio_brief_id": str(audio_brief_id), "approval_state": brief.approval_state.value},
+        )
+    if not brief.export_text.strip():
+        raise _api_error(422, "AUDIO_BRIEF_EXPORT_TEXT_REQUIRED", "export_text must not be empty", {"audio_brief_id": str(audio_brief_id)})
+    return ExportAudioBriefResponse(audio_brief_id=audio_brief_id, export_text=brief.export_text)
 
 
 @app.patch("/api/v1/visual-plans/{visual_plan_id}", response_model=UpdateVisualPlanResponse)
