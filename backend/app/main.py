@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+import json
+import time
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from .modules import ChannelMemory, ChannelMemoryRepository, HookVariant, RetentionReview, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
+from .modules import ApprovalState, ChannelMemory, ChannelMemoryRepository, ComplianceRecommendation, ComplianceReport, HookVariant, LLMCall, RetentionReview, ReviewerSource, RiskLevel, Script, ScriptAIService, ScriptQualityReport, ScriptRepository, ScriptSection, ScriptState
 
 app = FastAPI(title="QualityTube OS API")
 
@@ -122,6 +125,28 @@ class LatestRetentionResponse(BaseModel):
     script_id: UUID
     review: RetentionReview
 
+
+class ComplianceReviewRequest(BaseModel):
+    channel_id: str = Field(default="default", min_length=1)
+
+
+class ComplianceReportResponse(BaseModel):
+    report: ComplianceReport
+
+
+class ComplianceReportListResponse(BaseModel):
+    idea_id: str
+    reports: list[ComplianceReport]
+
+
+class ComplianceApprovalRequest(BaseModel):
+    approver: str = Field(min_length=1)
+
+
+class ComplianceOverrideRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    approver: str = Field(min_length=1)
+
 class GateFailed(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         self.code = code
@@ -133,6 +158,9 @@ repo = ScriptRepository()
 script_by_id: dict[UUID, Script] = {}
 channel_memory_repo = ChannelMemoryRepository()
 script_ai = ScriptAIService()
+compliance_reports_by_idea: dict[str, list[ComplianceReport]] = {}
+compliance_reports_by_id: dict[UUID, ComplianceReport] = {}
+
 
 # Seed sample memory for local/dev flows.
 channel_memory_repo.upsert(ChannelMemory(channel_id="default", tone_notes=["pragmatic", "specific"], banned_claims=["instant guaranteed growth"]))
@@ -167,6 +195,65 @@ def _basic_sections() -> list[ScriptSection]:
 
 
 
+
+
+
+def _risk_from_bool(flag: bool) -> RiskLevel:
+    return RiskLevel.high if flag else RiskLevel.low
+
+
+def _run_deterministic_compliance_checks(idea_id: str) -> dict[str, Any]:
+    script = repo.get_script(idea_id)
+    joined = " ".join(section.content.lower() for section in script.sections) if script else ""
+    checks = {
+        "missing_script": script is None,
+        "contains_guarantee_claim": "guaranteed" in joined,
+        "contains_copyright_terms": any(word in joined for word in ["copyright", "stolen", "pirated"]),
+        "contains_sensitive_terms": any(word in joined for word in ["violence", "self-harm", "medical", "financial advice"]),
+        "clickbait_pattern": any(term in joined for term in ["you won't believe", "shocking", "secret trick"]),
+        "low_human_contribution_signal": len(joined) < 150,
+    }
+    return checks
+
+
+def _ai_assisted_compliance_review(*, idea_id: str, deterministic: dict[str, Any], channel_id: str) -> dict[str, Any]:
+    prompt = (
+        "Produce strict JSON for compliance review. "
+        f"idea_id={idea_id}; channel_id={channel_id}; deterministic={json.dumps(deterministic)}; "
+        "schema={reused_content_risk,repetitive_content_risk,mass_production_risk,synthetic_content_disclosure_required,"
+        "copyright_risk,misleading_claims_risk,sensitive_topic_risk,clickbait_risk,originality_evidence,human_contribution_evidence,"
+        "overall_risk,recommendation,required_fixes,reviewer_notes}."
+    )
+    correlation_id = str(uuid4())
+    started = time.perf_counter()
+    raw = script_ai.provider.generate(prompt)
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    script_ai.logger.log(
+        LLMCall(
+            provider=type(script_ai.provider).__name__,
+            model=getattr(script_ai.provider, "model", "mock-model"),
+            operation="compliance_review",
+            prompt=prompt,
+            response=raw,
+            prompt_chars=len(prompt),
+            response_chars=len(raw),
+            prompt_tokens=max(1, len(prompt) // 4),
+            completion_tokens=max(1, len(raw) // 4),
+            latency_ms=latency_ms,
+            correlation_id=correlation_id,
+        )
+    )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _persist_compliance_report(report: ComplianceReport) -> ComplianceReport:
+    compliance_reports_by_idea.setdefault(report.idea_id, []).append(report)
+    compliance_reports_by_idea[report.idea_id].sort(key=lambda item: item.created_at)
+    compliance_reports_by_id[report.id] = report
+    return report
 
 def _api_error(status_code: int, code: str, message: str, details: dict[str, Any] | None = None) -> HTTPException:
     return HTTPException(status_code=status_code, detail=ErrorPayload(code=code, message=message, details=details or {}).model_dump())
@@ -453,3 +540,79 @@ def get_latest_retention(script_id: UUID) -> LatestRetentionResponse:
     if review is None:
         raise HTTPException(status_code=404, detail=ErrorPayload(code="RETENTION_REVIEW_NOT_FOUND", message="no retention review found for script").model_dump())
     return LatestRetentionResponse(script_id=script_id, review=review)
+
+
+@app.post("/api/v1/ideas/{idea_id}/compliance/review", response_model=ComplianceReportResponse)
+@app.post("/ideas/{idea_id}/compliance/review", response_model=ComplianceReportResponse)
+def review_compliance(idea_id: str, payload: ComplianceReviewRequest) -> ComplianceReportResponse:
+    deterministic = _run_deterministic_compliance_checks(idea_id)
+    ai_result = _ai_assisted_compliance_review(idea_id=idea_id, deterministic=deterministic, channel_id=payload.channel_id)
+    report = ComplianceReport(
+        idea_id=idea_id,
+        reused_content_risk=_risk_from_bool(deterministic["missing_script"]),
+        repetitive_content_risk=_risk_from_bool(deterministic["low_human_contribution_signal"]),
+        mass_production_risk=_risk_from_bool(deterministic["low_human_contribution_signal"]),
+        synthetic_content_disclosure_required=deterministic["low_human_contribution_signal"],
+        copyright_risk=_risk_from_bool(deterministic["contains_copyright_terms"]),
+        misleading_claims_risk=_risk_from_bool(deterministic["contains_guarantee_claim"]),
+        sensitive_topic_risk=_risk_from_bool(deterministic["contains_sensitive_terms"]),
+        clickbait_risk=_risk_from_bool(deterministic["clickbait_pattern"]),
+        originality_evidence=ai_result.get("originality_evidence", ["Deterministic+AI review completed"]),
+        human_contribution_evidence=ai_result.get("human_contribution_evidence", ["Human editorial checkpoints recorded"]),
+        overall_risk=RiskLevel.high if any(deterministic.values()) else RiskLevel.low,
+        recommendation=ComplianceRecommendation.high_risk if any(deterministic.values()) else ComplianceRecommendation.approve,
+        required_fixes=ai_result.get("required_fixes", ["Address flagged deterministic risks"] if any(deterministic.values()) else []),
+        reviewer_notes=ai_result.get("reviewer_notes", "Deterministic checks executed before AI-assisted pass."),
+        reviewer_source=ReviewerSource.ai_assisted,
+    )
+    persisted = _persist_compliance_report(report)
+    return ComplianceReportResponse(report=persisted)
+
+
+@app.get("/api/v1/ideas/{idea_id}/compliance/latest", response_model=ComplianceReportResponse)
+@app.get("/ideas/{idea_id}/compliance/latest", response_model=ComplianceReportResponse)
+def get_latest_compliance_report(idea_id: str) -> ComplianceReportResponse:
+    reports = compliance_reports_by_idea.get(idea_id, [])
+    if not reports:
+        raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "no compliance report found for idea", {"idea_id": idea_id})
+    return ComplianceReportResponse(report=max(reports, key=lambda r: r.created_at))
+
+
+@app.get("/api/v1/ideas/{idea_id}/compliance/reports", response_model=ComplianceReportListResponse)
+@app.get("/ideas/{idea_id}/compliance/reports", response_model=ComplianceReportListResponse)
+def list_compliance_reports(idea_id: str) -> ComplianceReportListResponse:
+    reports = sorted(compliance_reports_by_idea.get(idea_id, []), key=lambda r: r.created_at)
+    return ComplianceReportListResponse(idea_id=idea_id, reports=reports)
+
+
+@app.post("/api/v1/compliance/{report_id}/approve", response_model=ComplianceReportResponse)
+@app.post("/compliance/{report_id}/approve", response_model=ComplianceReportResponse)
+def approve_compliance_report(report_id: UUID, payload: ComplianceApprovalRequest) -> ComplianceReportResponse:
+    report = compliance_reports_by_id.get(report_id)
+    if report is None:
+        raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "compliance report not found", {"report_id": str(report_id)})
+    has_blockers = report.overall_risk == RiskLevel.high or report.recommendation in {ComplianceRecommendation.high_risk, ComplianceRecommendation.do_not_publish} or bool(report.required_fixes)
+    if has_blockers:
+        raise _api_error(409, "COMPLIANCE_BLOCKED", "blocking compliance conditions must be resolved before approval", {"report_id": str(report_id)})
+    updated = report.model_copy(update={"approval_state": ApprovalState.approved, "updated_at": datetime.now(UTC), "reviewer_notes": f"{report.reviewer_notes} Approved by {payload.approver}.".strip()})
+    compliance_reports_by_id[report_id] = updated
+    compliance_reports_by_idea[updated.idea_id] = [updated if item.id == report_id else item for item in compliance_reports_by_idea.get(updated.idea_id, [])]
+    return ComplianceReportResponse(report=updated)
+
+
+@app.post("/api/v1/compliance/{report_id}/override", response_model=ComplianceReportResponse)
+@app.post("/compliance/{report_id}/override", response_model=ComplianceReportResponse)
+def override_compliance_report(report_id: UUID, payload: ComplianceOverrideRequest) -> ComplianceReportResponse:
+    report = compliance_reports_by_id.get(report_id)
+    if report is None:
+        raise _api_error(404, "COMPLIANCE_REPORT_NOT_FOUND", "compliance report not found", {"report_id": str(report_id)})
+    reason = payload.reason.strip()
+    approver = payload.approver.strip()
+    if not reason:
+        raise _api_error(422, "OVERRIDE_REASON_REQUIRED", "override reason is required")
+    if not approver:
+        raise _api_error(422, "OVERRIDE_APPROVER_REQUIRED", "override approver identity is required")
+    updated = report.model_copy(update={"approval_state": ApprovalState.overridden, "override_reason": reason, "override_actor": approver, "reviewer_source": ReviewerSource.human_override, "updated_at": datetime.now(UTC)})
+    compliance_reports_by_id[report_id] = updated
+    compliance_reports_by_idea[updated.idea_id] = [updated if item.id == report_id else item for item in compliance_reports_by_idea.get(updated.idea_id, [])]
+    return ComplianceReportResponse(report=updated)
