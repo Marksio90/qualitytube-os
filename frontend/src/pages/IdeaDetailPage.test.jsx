@@ -30,6 +30,8 @@ describe("IdeaDetailPage", () => {
     mockFetchSequence([
       { body: { report: { id: "r1", recommendation: "approve", overall_risk: "low", synthetic_content_disclosure_required: false, required_fixes: [], reused_content_risk: "low", repetitive_content_risk: "low", mass_production_risk: "low", copyright_risk: "low", misleading_claims_risk: "low", sensitive_topic_risk: "low", clickbait_risk: "low" } } },
       { ok: false, body: { detail: { message: "no publishing package" } } },
+      { body: { titles: [] } },
+      { body: { thumbnails: [] } },
     ]);
 
     renderPage(container);
@@ -45,6 +47,8 @@ describe("IdeaDetailPage", () => {
     mockFetchSequence([
       { body: { report: { id: "r1", recommendation: "approve", overall_risk: "low", synthetic_content_disclosure_required: false, required_fixes: [], reused_content_risk: "low", repetitive_content_risk: "low", mass_production_risk: "low", copyright_risk: "low", misleading_claims_risk: "low", sensitive_topic_risk: "low", clickbait_risk: "low" } } },
       { body: { package: { title: "Initial", description: "desc", tags: "", chapters: "", pinned_comment: "", thumbnail_brief: "", disclosure_notes: "", checklist: "", validation: { warnings: ["tone warning"], errors: [], compliance_blockers: [] } } } },
+      { body: { titles: [] } },
+      { body: { thumbnails: [] } },
       { body: { package: { title: "Updated" } } },
     ]);
 
@@ -71,6 +75,8 @@ describe("IdeaDetailPage", () => {
     mockFetchSequence([
       { body: { report: { id: "r1", recommendation: "approve", overall_risk: "low", synthetic_content_disclosure_required: false, required_fixes: [], reused_content_risk: "low", repetitive_content_risk: "low", mass_production_risk: "low", copyright_risk: "low", misleading_claims_risk: "low", sensitive_topic_risk: "low", clickbait_risk: "low" } } },
       { body: { package: { title: "Existing", description: "desc", validation: { warnings: [], errors: ["title too short"], compliance_blockers: ["missing disclosure"] } } } },
+      { body: { titles: [] } },
+      { body: { thumbnails: [] } },
       { body: { validation: { warnings: [], errors: [], compliance_blockers: [] }, package: { title: "Existing" } } },
       { body: { package: { title: "Existing" } } },
       { body: { package: { title: "Existing" } } },
