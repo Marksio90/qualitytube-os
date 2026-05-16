@@ -1,6 +1,6 @@
 import pytest
 
-from app.modules.script_ai import ComplianceReviewPayload, OutlinePayload, ScriptAIService
+from app.modules.script_ai import ComplianceReviewPayload, OutlinePayload, ScriptAIService, VisualPlanPayload
 
 
 class BadProvider:
@@ -112,3 +112,56 @@ def test_review_compliance_rejects_extra_fields() -> None:
     svc = ScriptAIService(provider=provider)
     with pytest.raises(ValueError, match="did not match schema"):
         svc.review_compliance(angle="a", channel_memory="mem", script_text="script body")
+
+
+def test_generate_visual_plan_success_and_operation_logging() -> None:
+    provider = MockProvider(
+        [
+            '{"scenes":[{"scene_number":1,"narration_excerpt":"Hook claim","visual_type":"chart","visual_description":"Simple bar chart","purpose":"Show contrast","asset_notes":null,"risk_notes":null,"filler_risk_score":0.2}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    result = svc.generate_visual_plan(approved_script_sections=[], approved_angle="angle", channel_memory="mem")
+    assert isinstance(result, VisualPlanPayload)
+    assert result.scenes[0].visual_type == "chart"
+    assert "Approved script sections:" in provider.prompts[-1]
+
+
+def test_generate_visual_plan_rejects_unordered_scenes() -> None:
+    provider = MockProvider(
+        [
+            '{"scenes":[{"scene_number":2,"narration_excerpt":"A","visual_type":"stock","visual_description":"A","purpose":"A","filler_risk_score":0.3},{"scene_number":1,"narration_excerpt":"B","visual_type":"stock","visual_description":"B","purpose":"B","filler_risk_score":0.3}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="strictly ordered"):
+        svc.generate_visual_plan(approved_script_sections=[], approved_angle="angle", channel_memory="mem")
+
+
+def test_generate_visual_plan_rejects_empty_scenes() -> None:
+    provider = MockProvider(['{"scenes":[]}'])
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="must not be empty"):
+        svc.generate_visual_plan(approved_script_sections=[], approved_angle="angle", channel_memory="mem")
+
+
+def test_generate_visual_plan_rejects_blank_purpose() -> None:
+    provider = MockProvider(
+        [
+            '{"scenes":[{"scene_number":1,"narration_excerpt":"A","visual_type":"stock","visual_description":"A","purpose":"   ","filler_risk_score":0.3}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="purpose must not be blank"):
+        svc.generate_visual_plan(approved_script_sections=[], approved_angle="angle", channel_memory="mem")
+
+
+def test_generate_visual_plan_rejects_out_of_range_filler_risk_score() -> None:
+    provider = MockProvider(
+        [
+            '{"scenes":[{"scene_number":1,"narration_excerpt":"A","visual_type":"stock","visual_description":"A","purpose":"ok","filler_risk_score":1.5}]}'
+        ]
+    )
+    svc = ScriptAIService(provider=provider)
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        svc.generate_visual_plan(approved_script_sections=[], approved_angle="angle", channel_memory="mem")
