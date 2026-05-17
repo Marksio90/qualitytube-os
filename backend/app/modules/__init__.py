@@ -1,3 +1,5 @@
+from .analytics import AnalyticsReport, AffiliateLink, MonetizationPlan, RevenueStream, RetentionPoint, YouTubeQuotaLedgerEntry
+from .angle import Angle
 from .audio_brief import AudioBrief, AudioBriefRepository, AudioBriefRepositoryError, VoiceStyle
 from .audio_brief_ai import AudioBriefAIGenerationError, AudioBriefAIService, AudioBriefPayload
 from .ai_provider import AIProvider, MockProvider
@@ -11,7 +13,8 @@ from .compliance import (
     RiskLevel,
 )
 from .compliance_checks import ComplianceCheckInput, ComplianceCheckResult, compliance_gate_failures, publishing_blocked, run_compliance_checks
-from .ideas import Idea
+from .channel import Channel
+from .ideas import ContentIdea, Idea
 from .publishing_package import (
     PublishingPackage,
     PublishingPackageRepository,
@@ -25,6 +28,7 @@ from .publishing_package_validation import (
     PublishingValidationResult,
 )
 from .llm_logging import LLMCall, LLMCallLogger
+from .organization import Organization, Workspace
 from .research_brief import ResearchBrief
 from .script_ai import (
     DraftPayload,
@@ -46,6 +50,7 @@ from .title_thumbnail_ai import (
     TitleThumbnailAIService,
 )
 from .visual_plan import VisualPlan, VisualPlanApprovalState, VisualPlanRepository, VisualScene, VisualType
+from .workflow import Approval, WorkflowRun, WorkflowStep
 from .scripts import (
     HookVariant,
     HookVariantCreate,
@@ -60,7 +65,11 @@ from .scripts import (
 )
 
 __all__ = [
+    "AffiliateLink",
     "AIProvider",
+    "AnalyticsReport",
+    "Angle",
+    "Approval",
     "AudioBriefAIGenerationError",
     "AudioBriefAIService",
     "AudioBriefPayload",
@@ -83,11 +92,14 @@ __all__ = [
     "HookVariant",
     "HookVariantCreate",
     "HookVariantsPayload",
+    "Channel",
+    "ContentIdea",
     "Idea",
     "ImprovementPayload",
     "LLMCall",
     "LLMCallLogger",
     "MockProvider",
+    "MonetizationPlan",
     "OutlinePayload",
     "PublishingPackage",
     "PublishingPackageRepository",
@@ -98,7 +110,10 @@ __all__ = [
     "PublishingPackageValidationService",
     "PublishingPackageExportFormat",
     "PublishingPackageExportService",
+    "Organization",
     "ResearchBrief",
+    "RetentionPoint",
+    "RevenueStream",
     "ReviewerSource",
     "RiskLevel",
     "RetentionAnalysisPayload",
@@ -127,4 +142,8 @@ __all__ = [
     "VisualType",
     "VoiceStyle",
     "ScriptVersion",
+    "Workspace",
+    "WorkflowRun",
+    "WorkflowStep",
+    "YouTubeQuotaLedgerEntry",
 ]
